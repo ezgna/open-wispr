@@ -7,9 +7,11 @@ public struct LanguageOption: Equatable, Sendable {
 
 public struct Config: Codable {
     public var hotkeys: [HotkeyConfig]
+    public var profiles: [DictationProfile]?
     public var modelPath: String?
     public var modelSize: String
     public var language: String
+    public var codexTranslation: CodexTranslationConfig?
     public var spokenPunctuation: FlexBool?
     public var maxRecordings: Int?
     public var toggleMode: FlexBool?
@@ -21,8 +23,17 @@ public struct Config: Codable {
     }
 
     public func hotkeySummary() -> String {
-        hotkeys
-            .map { KeyCodes.describe(keyCode: $0.keyCode, modifiers: $0.modifiers) }
+        guard profiles?.isEmpty == false else {
+            return hotkeys
+                .map { KeyCodes.describe(keyCode: $0.keyCode, modifiers: $0.modifiers) }
+                .joined(separator: " · ")
+        }
+
+        return runtimeProfiles()
+            .map { profile in
+                let desc = KeyCodes.describe(keyCode: profile.hotkey.keyCode, modifiers: profile.hotkey.modifiers)
+                return "\(profile.id):\(desc)"
+            }
             .joined(separator: " · ")
     }
 
@@ -34,12 +45,50 @@ public struct Config: Codable {
         return out
     }
 
+    private static func deduplicateProfiles(_ list: [DictationProfile]) -> [DictationProfile] {
+        var out: [DictationProfile] = []
+        for profile in list {
+            if !out.contains(where: { $0.hotkey == profile.hotkey }) {
+                out.append(profile)
+            }
+        }
+        return out
+    }
+
+    public func runtimeProfiles() -> [DictationProfile] {
+        if let profiles = profiles, !profiles.isEmpty {
+            return profiles
+        }
+
+        return hotkeys.enumerated().map { index, hotkey in
+            DictationProfile(
+                id: index == 0 ? "default" : "hotkey-\(index + 1)",
+                hotkey: hotkey,
+                modelSize: nil,
+                language: nil,
+                action: nil,
+                targetLanguage: nil,
+                translator: nil
+            )
+        }
+    }
+
+    public func effectiveModelSize(for profile: DictationProfile) -> String {
+        Config.resolveModelAlias(profile.modelSize ?? modelSize)
+    }
+
+    public func effectiveLanguage(for profile: DictationProfile) -> String {
+        profile.language ?? language
+    }
+
     private enum CodingKeys: String, CodingKey {
         case hotkey
         case hotkeys
+        case profiles
         case modelPath
         case modelSize
         case language
+        case codexTranslation
         case spokenPunctuation
         case maxRecordings
         case toggleMode
@@ -48,18 +97,26 @@ public struct Config: Codable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let profilesList = try c.decodeIfPresent([DictationProfile].self, forKey: .profiles)
         let hotkeysList = try c.decodeIfPresent([HotkeyConfig].self, forKey: .hotkeys)
         let legacyHotkey = try c.decodeIfPresent(HotkeyConfig.self, forKey: .hotkey)
-        if let list = hotkeysList, !list.isEmpty {
+        if let list = profilesList, !list.isEmpty {
+            self.profiles = Config.deduplicateProfiles(list)
+            self.hotkeys = Config.deduplicateHotkeys(self.profiles?.map { $0.hotkey } ?? [])
+        } else if let list = hotkeysList, !list.isEmpty {
+            self.profiles = nil
             self.hotkeys = Config.deduplicateHotkeys(list)
         } else if let legacy = legacyHotkey {
+            self.profiles = nil
             self.hotkeys = [legacy]
         } else {
+            self.profiles = nil
             self.hotkeys = [HotkeyConfig(keyCode: 63, modifiers: [])]
         }
         self.modelPath = try c.decodeIfPresent(String.self, forKey: .modelPath)
         self.modelSize = try c.decode(String.self, forKey: .modelSize)
         self.language = try c.decode(String.self, forKey: .language)
+        self.codexTranslation = try c.decodeIfPresent(CodexTranslationConfig.self, forKey: .codexTranslation)
         self.spokenPunctuation = try c.decodeIfPresent(FlexBool.self, forKey: .spokenPunctuation)
         self.maxRecordings = try c.decodeIfPresent(Int.self, forKey: .maxRecordings)
         self.toggleMode = try c.decodeIfPresent(FlexBool.self, forKey: .toggleMode)
@@ -70,9 +127,11 @@ public struct Config: Codable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(hotkeys, forKey: .hotkeys)
         try c.encode(hotkeys[0], forKey: .hotkey)
+        try c.encodeIfPresent(profiles, forKey: .profiles)
         try c.encodeIfPresent(modelPath, forKey: .modelPath)
         try c.encode(modelSize, forKey: .modelSize)
         try c.encode(language, forKey: .language)
+        try c.encodeIfPresent(codexTranslation, forKey: .codexTranslation)
         try c.encodeIfPresent(spokenPunctuation, forKey: .spokenPunctuation)
         try c.encodeIfPresent(maxRecordings, forKey: .maxRecordings)
         try c.encodeIfPresent(toggleMode, forKey: .toggleMode)
@@ -81,20 +140,29 @@ public struct Config: Codable {
 
     public init(
         hotkeys: [HotkeyConfig],
+        profiles: [DictationProfile]? = nil,
         modelPath: String?,
         modelSize: String,
         language: String,
+        codexTranslation: CodexTranslationConfig? = nil,
         spokenPunctuation: FlexBool?,
         maxRecordings: Int?,
         toggleMode: FlexBool?,
         audioInputDeviceID: UInt32? = nil
     ) {
-        self.hotkeys = hotkeys.isEmpty
-            ? [HotkeyConfig(keyCode: 63, modifiers: [])]
-            : Config.deduplicateHotkeys(hotkeys)
+        if let profiles = profiles, !profiles.isEmpty {
+            self.profiles = Config.deduplicateProfiles(profiles)
+            self.hotkeys = Config.deduplicateHotkeys(self.profiles?.map { $0.hotkey } ?? [])
+        } else {
+            self.profiles = nil
+            self.hotkeys = hotkeys.isEmpty
+                ? [HotkeyConfig(keyCode: 63, modifiers: [])]
+                : Config.deduplicateHotkeys(hotkeys)
+        }
         self.modelPath = modelPath
         self.modelSize = modelSize
         self.language = language
+        self.codexTranslation = codexTranslation
         self.spokenPunctuation = spokenPunctuation
         self.maxRecordings = maxRecordings
         self.toggleMode = toggleMode
@@ -239,9 +307,11 @@ public struct Config: Codable {
 
     public static let defaultConfig = Config(
         hotkeys: [HotkeyConfig(keyCode: 63, modifiers: [])],
+        profiles: nil,
         modelPath: nil,
         modelSize: "base.en",
         language: "en",
+        codexTranslation: nil,
         spokenPunctuation: FlexBool(false),
         maxRecordings: nil,
         toggleMode: FlexBool(false)
@@ -292,7 +362,7 @@ public struct Config: Codable {
     }
 }
 
-public struct FlexBool: Codable {
+public struct FlexBool: Codable, Equatable {
     public let value: Bool
 
     public init(_ value: Bool) { self.value = value }
@@ -333,9 +403,78 @@ public struct HotkeyConfig: Codable, Equatable {
             case "shift": flags |= UInt64(1 << 17)
             case "ctrl", "control": flags |= UInt64(1 << 18)
             case "opt", "option", "alt": flags |= UInt64(1 << 19)
+            case "fn", "function", "globe": flags |= UInt64(1 << 23)
             default: break
             }
         }
         return flags
+    }
+}
+
+public enum DictationAction: String, Codable {
+    case transcribe
+    case translate
+}
+
+public struct DictationProfile: Codable, Equatable {
+    public var id: String
+    public var hotkey: HotkeyConfig
+    public var modelSize: String?
+    public var language: String?
+    public var action: String?
+    public var targetLanguage: String?
+    public var translator: String?
+
+    public init(
+        id: String,
+        hotkey: HotkeyConfig,
+        modelSize: String?,
+        language: String?,
+        action: String?,
+        targetLanguage: String?,
+        translator: String?
+    ) {
+        self.id = id
+        self.hotkey = hotkey
+        self.modelSize = modelSize.map(Config.resolveModelAlias)
+        self.language = language
+        self.action = action
+        self.targetLanguage = targetLanguage
+        self.translator = translator
+    }
+
+    public var effectiveAction: DictationAction {
+        DictationAction(rawValue: action ?? DictationAction.transcribe.rawValue) ?? .transcribe
+    }
+
+    public var usesTranslation: Bool {
+        effectiveAction == .translate || targetLanguage != nil
+    }
+}
+
+public struct CodexTranslationConfig: Codable, Equatable {
+    public var command: String?
+    public var model: String?
+    public var timeoutSeconds: Double?
+    public var extraArgs: [String]?
+
+    public init(
+        command: String? = nil,
+        model: String? = nil,
+        timeoutSeconds: Double? = nil,
+        extraArgs: [String]? = nil
+    ) {
+        self.command = command
+        self.model = model
+        self.timeoutSeconds = timeoutSeconds
+        self.extraArgs = extraArgs
+    }
+
+    public var effectiveCommand: String {
+        command?.isEmpty == false ? command! : "codex"
+    }
+
+    public var effectiveTimeoutSeconds: Double {
+        max(5, timeoutSeconds ?? 45)
     }
 }

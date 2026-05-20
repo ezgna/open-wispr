@@ -232,6 +232,11 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(config.modifierFlags, expected)
     }
 
+    func testModifierFlagsFn() {
+        let config = HotkeyConfig(keyCode: 49, modifiers: ["fn"])
+        XCTAssertEqual(config.modifierFlags, UInt64(1 << 23))
+    }
+
     func testModifierFlagsEmpty() {
         let config = HotkeyConfig(keyCode: 63, modifiers: [])
         XCTAssertEqual(config.modifierFlags, 0)
@@ -294,6 +299,62 @@ final class ConfigTests: XCTestCase {
         let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         XCTAssertNotNil(obj?["hotkey"])
         XCTAssertNotNil(obj?["hotkeys"])
+    }
+
+    func testConfigDecodesProfiles() throws {
+        let json = """
+        {
+            "profiles": [
+                {
+                    "id": "dictate-ja",
+                    "hotkey": {"keyCode": 63, "modifiers": []},
+                    "modelSize": "large",
+                    "language": "ja"
+                },
+                {
+                    "id": "en-ja",
+                    "hotkey": {"keyCode": 49, "modifiers": ["fn"]},
+                    "language": "en",
+                    "action": "translate",
+                    "targetLanguage": "ja",
+                    "translator": "codex"
+                }
+            ],
+            "modelSize": "base",
+            "language": "ja",
+            "codexTranslation": {
+                "command": "codex",
+                "timeoutSeconds": 20
+            }
+        }
+        """.data(using: .utf8)!
+
+        let config = try Config.decode(from: json)
+
+        XCTAssertEqual(config.runtimeProfiles().count, 2)
+        XCTAssertEqual(config.hotkeys.count, 2)
+        XCTAssertEqual(config.effectiveModelSize(for: config.runtimeProfiles()[0]), "large-v3")
+        XCTAssertEqual(config.runtimeProfiles()[1].effectiveAction, .translate)
+        XCTAssertEqual(config.runtimeProfiles()[1].targetLanguage, "ja")
+        XCTAssertEqual(config.codexTranslation?.effectiveTimeoutSeconds, 20)
+    }
+
+    func testRuntimeProfilesFallbackToLegacyHotkeys() throws {
+        let json = """
+        {
+            "hotkeys": [
+                {"keyCode": 63, "modifiers": []},
+                {"keyCode": 96, "modifiers": []}
+            ],
+            "modelSize": "base.en",
+            "language": "en"
+        }
+        """.data(using: .utf8)!
+
+        let config = try Config.decode(from: json)
+
+        XCTAssertEqual(config.runtimeProfiles().map { $0.id }, ["default", "hotkey-2"])
+        XCTAssertEqual(config.runtimeProfiles()[0].effectiveAction, .transcribe)
     }
 }
 

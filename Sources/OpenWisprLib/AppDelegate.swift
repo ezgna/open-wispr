@@ -2,13 +2,14 @@ import AppKit
 
 public class AppDelegate: NSObject, NSApplicationDelegate {
     var statusBar: StatusBarController!
-    var hotkeyManagers: [HotkeyManager] = []
+    var hotkeyRouter: ProfileHotkeyManager?
     var recorder: AudioRecorder!
     var transcriber: Transcriber!
     var inserter: TextInserter!
     var config: Config!
     var isPressed = false
     var isReady = false
+    var activeProfile: DictationProfile?
     public var lastTranscription: String?
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
@@ -81,35 +82,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             print("Accessibility: granted")
         }
 
-        if !Transcriber.modelExists(modelSize: config.modelSize) {
-            DispatchQueue.main.async {
-                self.statusBar.state = .downloading
-                self.statusBar.updateDownloadProgress("Downloading \(self.config.modelSize) model...")
-            }
-            print("Downloading \(config.modelSize) model...")
-            try ModelDownloader.download(modelSize: config.modelSize) { [weak self] percent in
-                DispatchQueue.main.async {
-                    let pct = Int(percent)
-                    self?.statusBar.updateDownloadProgress("Downloading \(self?.config.modelSize ?? "") model... \(pct)%", percent: percent)
-                }
-            }
-            DispatchQueue.main.async {
-                self.statusBar.updateDownloadProgress(nil)
-            }
-        }
-
-        if let modelPath = Transcriber.findModel(modelSize: config.modelSize) {
-            let modelURL = URL(fileURLWithPath: modelPath)
-            if !ModelDownloader.isValidGGMLFile(at: modelURL) {
-                let msg = "Model file is corrupted. Re-download with: open-wispr download-model \(config.modelSize)"
-                print("Error: \(msg)")
-                DispatchQueue.main.async {
-                    self.statusBar.state = .error(msg)
-                    self.statusBar.buildMenu()
-                }
-                return
-            }
-        }
+        try ensureRequiredModelsAvailable(config)
 
         recorder.prewarm()
 
@@ -119,23 +92,20 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startListening() {
-        for m in hotkeyManagers { m.stop() }
-        hotkeyManagers = []
-        for hk in config.hotkeys {
-            let manager = HotkeyManager(
-                keyCode: hk.keyCode,
-                modifiers: hk.modifierFlags
-            )
-            manager.start(
-                onKeyDown: { [weak self] in
-                    self?.handleKeyDown()
-                },
-                onKeyUp: { [weak self] in
-                    self?.handleKeyUp()
-                }
-            )
-            hotkeyManagers.append(manager)
-        }
+        hotkeyRouter?.stop()
+        let router = ProfileHotkeyManager(
+            profiles: config.runtimeProfiles(),
+            toggleMode: config.toggleMode?.value ?? false
+        )
+        router.start(
+            onKeyDown: { [weak self] profile in
+                self?.handleKeyDown(profile: profile)
+            },
+            onKeyUp: { [weak self] profile in
+                self?.handleKeyUp(profile: profile)
+            }
+        )
+        hotkeyRouter = router
 
         isReady = true
         statusBar.state = .idle
@@ -167,29 +137,29 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         transcriber.spokenPunctuation = config.spokenPunctuation?.value ?? false
         inserter = TextInserter()
 
-        for m in hotkeyManagers { m.stop() }
-        hotkeyManagers = []
-        for hk in config.hotkeys {
-            let manager = HotkeyManager(
-                keyCode: hk.keyCode,
-                modifiers: hk.modifierFlags
-            )
-            manager.start(
-                onKeyDown: { [weak self] in self?.handleKeyDown() },
-                onKeyUp: { [weak self] in self?.handleKeyUp() }
-            )
-            hotkeyManagers.append(manager)
-        }
+        hotkeyRouter?.stop()
+        let router = ProfileHotkeyManager(
+            profiles: config.runtimeProfiles(),
+            toggleMode: config.toggleMode?.value ?? false
+        )
+        router.start(
+            onKeyDown: { [weak self] profile in self?.handleKeyDown(profile: profile) },
+            onKeyUp: { [weak self] profile in self?.handleKeyUp(profile: profile) }
+        )
+        hotkeyRouter = router
 
-        if !wasDownloading && !Transcriber.modelExists(modelSize: config.modelSize) {
+        let missingModels = requiredModelSizes(config).filter { !Transcriber.modelExists(modelSize: $0) }
+        if !wasDownloading && !missingModels.isEmpty {
             statusBar.state = .downloading
-            statusBar.updateDownloadProgress("Downloading \(config.modelSize) model...")
+            statusBar.updateDownloadProgress("Downloading \(missingModels[0]) model...")
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 do {
-                    try ModelDownloader.download(modelSize: newConfig.modelSize) { percent in
-                        DispatchQueue.main.async {
-                            let pct = Int(percent)
-                            self?.statusBar.updateDownloadProgress("Downloading \(newConfig.modelSize) model... \(pct)%", percent: percent)
+                    for modelSize in missingModels {
+                        try ModelDownloader.download(modelSize: modelSize) { percent in
+                            DispatchQueue.main.async {
+                                let pct = Int(percent)
+                                self?.statusBar.updateDownloadProgress("Downloading \(modelSize) model... \(pct)%", percent: percent)
+                            }
                         }
                     }
                     DispatchQueue.main.async {
@@ -212,7 +182,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         print("Config updated: lang=\(config.language) model=\(config.modelSize) hotkey=\(hotkeyDesc)")
     }
 
-    private func handleKeyDown() {
+    private func handleKeyDown(profile: DictationProfile) {
         guard isReady else { return }
 
         let isToggle = config.toggleMode?.value ?? false
@@ -221,24 +191,25 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             if isPressed {
                 handleRecordingStop()
             } else {
-                handleRecordingStart()
+                handleRecordingStart(profile: profile)
             }
         } else {
             guard !isPressed else { return }
-            handleRecordingStart()
+            handleRecordingStart(profile: profile)
         }
     }
 
-    private func handleKeyUp() {
+    private func handleKeyUp(profile _: DictationProfile) {
         let isToggle = config.toggleMode?.value ?? false
         if isToggle { return }
 
         handleRecordingStop()
     }
 
-    private func handleRecordingStart() {
+    private func handleRecordingStart(profile: DictationProfile) {
         guard !isPressed else { return }
         isPressed = true
+        activeProfile = profile
         statusBar.state = .recording
         do {
             let outputURL: URL
@@ -261,8 +232,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard let audioURL = recorder.stopRecording() else {
             statusBar.state = .idle
+            activeProfile = nil
             return
         }
+        let profile = activeProfile ?? config.runtimeProfiles()[0]
+        activeProfile = nil
 
         statusBar.state = .transcribing
 
@@ -275,8 +249,24 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             do {
-                let raw = try self.transcriber.transcribe(audioURL: audioURL)
-                let text = (self.config.spokenPunctuation?.value ?? false) ? TextPostProcessor.process(raw) : raw
+                let transcriber = Transcriber(
+                    modelSize: self.config.effectiveModelSize(for: profile),
+                    language: self.config.effectiveLanguage(for: profile)
+                )
+                transcriber.spokenPunctuation = self.config.spokenPunctuation?.value ?? false
+                let raw = try transcriber.transcribe(audioURL: audioURL)
+                var text = (self.config.spokenPunctuation?.value ?? false) ? TextPostProcessor.process(raw) : raw
+                if profile.usesTranslation {
+                    guard let targetLanguage = profile.targetLanguage else {
+                        throw CodexTranslationError.failed("profile '\(profile.id)' に targetLanguage が必要です")
+                    }
+                    text = try CodexTranslationService.translate(
+                        text: text,
+                        sourceLanguage: self.config.effectiveLanguage(for: profile),
+                        targetLanguage: targetLanguage,
+                        config: self.config.codexTranslation
+                    )
+                }
                 if maxRecordings > 0 {
                     RecordingStore.prune(maxCount: maxRecordings)
                 }
@@ -302,6 +292,53 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                             self.statusBar.buildMenu()
                         }
                     }
+                }
+            }
+        }
+    }
+
+    private func requiredModelSizes(_ config: Config) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for profile in config.runtimeProfiles() {
+            let modelSize = config.effectiveModelSize(for: profile)
+            if !seen.contains(modelSize) {
+                seen.insert(modelSize)
+                result.append(modelSize)
+            }
+        }
+        return result
+    }
+
+    private func ensureRequiredModelsAvailable(_ config: Config) throws {
+        for modelSize in requiredModelSizes(config) {
+            if !Transcriber.modelExists(modelSize: modelSize) {
+                DispatchQueue.main.async {
+                    self.statusBar.state = .downloading
+                    self.statusBar.updateDownloadProgress("Downloading \(modelSize) model...")
+                }
+                print("Downloading \(modelSize) model...")
+                try ModelDownloader.download(modelSize: modelSize) { [weak self] percent in
+                    DispatchQueue.main.async {
+                        let pct = Int(percent)
+                        self?.statusBar.updateDownloadProgress("Downloading \(modelSize) model... \(pct)%", percent: percent)
+                    }
+                }
+                DispatchQueue.main.async {
+                    self.statusBar.updateDownloadProgress(nil)
+                }
+            }
+
+            if let modelPath = Transcriber.findModel(modelSize: modelSize) {
+                let modelURL = URL(fileURLWithPath: modelPath)
+                if !ModelDownloader.isValidGGMLFile(at: modelURL) {
+                    let msg = "Model file is corrupted. Re-download with: open-wispr download-model \(modelSize)"
+                    print("Error: \(msg)")
+                    DispatchQueue.main.async {
+                        self.statusBar.state = .error(msg)
+                        self.statusBar.buildMenu()
+                    }
+                    throw TranscriberError.modelNotFound(modelSize)
                 }
             }
         }

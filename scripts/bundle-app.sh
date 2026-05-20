@@ -46,6 +46,17 @@ cat > "$APP_DIR/Contents/Info.plist" << PLIST
 </plist>
 PLIST
 
-codesign --force --sign - --identifier com.human37.open-wispr "$APP_DIR"
+if [[ -n "${OPEN_WISPR_CODESIGN_IDENTITY:-}" ]]; then
+    SIGN_IDENTITY="$OPEN_WISPR_CODESIGN_IDENTITY"
+else
+    SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+        | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' \
+        | head -n 1)"
+    if [[ -z "$SIGN_IDENTITY" ]]; then
+        SIGN_IDENTITY="OpenWispr Local Code Signing Root"
+    fi
+fi
+echo "Signing with: $SIGN_IDENTITY"
+codesign --force --timestamp=none --sign "$SIGN_IDENTITY" --identifier com.human37.open-wispr "$APP_DIR"
 
 echo "Built $APP_DIR"

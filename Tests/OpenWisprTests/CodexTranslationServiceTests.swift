@@ -15,7 +15,7 @@ final class CodexTranslationServiceTests: XCTestCase {
         XCTAssertTrue(args.contains("--ephemeral"))
         XCTAssertTrue(args.contains("--ignore-rules"))
         XCTAssertTrue(args.contains("--skip-git-repo-check"))
-        XCTAssertTrue(args.contains("model_reasoning_effort=\"low\""))
+        XCTAssertTrue(args.contains("model_reasoning_effort=\"none\""))
         XCTAssertEqual(args.suffix(1), ["-"])
     }
 
@@ -23,6 +23,7 @@ final class CodexTranslationServiceTests: XCTestCase {
         let config = CodexTranslationConfig(
             command: "codex",
             model: nil,
+            reasoningEffort: "low",
             timeoutSeconds: nil,
             extraArgs: ["-c", "model_reasoning_effort=\"medium\""]
         )
@@ -35,5 +36,15 @@ final class CodexTranslationServiceTests: XCTestCase {
         XCTAssertTrue(args.contains("model_reasoning_effort=\"low\""))
         XCTAssertTrue(args.contains("model_reasoning_effort=\"medium\""))
         XCTAssertEqual(args.suffix(1), ["-"])
+    }
+
+    func testCodexTranslationConfigDefaultsToAppServerSpeedSettings() {
+        let config = CodexTranslationConfig(backend: "appServer")
+
+        XCTAssertEqual(config.effectiveBackend, .appServer)
+        XCTAssertEqual(config.effectiveModel, "gpt-5.4-mini")
+        XCTAssertEqual(config.effectiveReasoningEffort, "none")
+        XCTAssertEqual(config.effectiveAppServerPort, 8768)
+        XCTAssertTrue(config.shouldFallbackToExec)
     }
 }

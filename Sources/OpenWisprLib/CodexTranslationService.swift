@@ -11,6 +11,20 @@ public final class CodexTranslationService {
         guard !trimmed.isEmpty else { return "" }
 
         let config = config ?? CodexTranslationConfig()
+        if config.effectiveBackend == .appServer {
+            do {
+                return try CodexAppServerTranslationService.shared.translate(
+                    text: trimmed,
+                    sourceLanguage: sourceLanguage,
+                    targetLanguage: targetLanguage,
+                    config: config
+                )
+            } catch {
+                guard config.shouldFallbackToExec else { throw error }
+                print("Codex app-server translation failed, falling back to codex exec: \(error.localizedDescription)")
+            }
+        }
+
         let outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("open-wispr-codex-\(UUID().uuidString).txt")
         defer { try? FileManager.default.removeItem(at: outputURL) }
@@ -33,7 +47,7 @@ public final class CodexTranslationService {
         process.standardError = stderrPipe
 
         try process.run()
-        stdinPipe.fileHandleForWriting.write(Data(prompt(
+        stdinPipe.fileHandleForWriting.write(Data(makePrompt(
             text: trimmed,
             sourceLanguage: sourceLanguage,
             targetLanguage: targetLanguage
@@ -101,10 +115,10 @@ public final class CodexTranslationService {
             "--color", "never",
             "--output-last-message", outputURL.path,
             "-C", workingDirectory.path,
-            "-c", "model_reasoning_effort=\"low\"",
+            "-c", "model_reasoning_effort=\"\(config.effectiveReasoningEffort)\"",
         ]
-        if let model = config.model, !model.isEmpty {
-            args += ["-m", model]
+        if config.model?.isEmpty == false {
+            args += ["-m", config.effectiveModel]
         }
         if let extraArgs = config.extraArgs {
             args += extraArgs
@@ -113,7 +127,7 @@ public final class CodexTranslationService {
         return args
     }
 
-    private static func prompt(text: String, sourceLanguage: String, targetLanguage: String) -> String {
+    static func makePrompt(text: String, sourceLanguage: String, targetLanguage: String) -> String {
         """
         あなたは翻訳関数です。
         次のテキストを\(languageName(sourceLanguage))から\(languageName(targetLanguage))へ自然に翻訳してください。
@@ -140,11 +154,15 @@ public final class CodexTranslationService {
         }
     }
 
-    private static func clean(_ text: String) -> String {
+    static func clean(_ text: String) -> String {
         text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "\"'`"))
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    public static func shutdown() {
+        CodexAppServerTranslationService.shared.shutdown()
     }
 }
 

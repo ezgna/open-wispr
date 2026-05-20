@@ -453,28 +453,71 @@ public struct DictationProfile: Codable, Equatable {
 }
 
 public struct CodexTranslationConfig: Codable, Equatable {
+    public var backend: String?
     public var command: String?
     public var model: String?
+    public var reasoningEffort: String?
+    public var serviceTier: String?
     public var timeoutSeconds: Double?
     public var extraArgs: [String]?
+    public var appServerPort: Int?
+    public var codexHome: String?
+    public var fallbackToExec: Bool?
 
     public init(
+        backend: String? = nil,
         command: String? = nil,
         model: String? = nil,
+        reasoningEffort: String? = nil,
+        serviceTier: String? = nil,
         timeoutSeconds: Double? = nil,
-        extraArgs: [String]? = nil
+        extraArgs: [String]? = nil,
+        appServerPort: Int? = nil,
+        codexHome: String? = nil,
+        fallbackToExec: Bool? = nil
     ) {
+        self.backend = backend
         self.command = command
         self.model = model
+        self.reasoningEffort = reasoningEffort
+        self.serviceTier = serviceTier
         self.timeoutSeconds = timeoutSeconds
         self.extraArgs = extraArgs
+        self.appServerPort = appServerPort
+        self.codexHome = codexHome
+        self.fallbackToExec = fallbackToExec
+    }
+
+    public enum Backend: String {
+        case exec
+        case appServer
+    }
+
+    public var effectiveBackend: Backend {
+        Backend(rawValue: backend ?? "") ?? .exec
     }
 
     public var effectiveCommand: String {
         command?.isEmpty == false ? command! : "codex"
     }
 
+    public var effectiveModel: String {
+        model?.isEmpty == false ? model! : "gpt-5.4-mini"
+    }
+
+    public var effectiveReasoningEffort: String {
+        reasoningEffort?.isEmpty == false ? reasoningEffort! : "none"
+    }
+
     public var effectiveTimeoutSeconds: Double {
         max(5, timeoutSeconds ?? 45)
+    }
+
+    public var effectiveAppServerPort: Int {
+        appServerPort ?? 8768
+    }
+
+    public var shouldFallbackToExec: Bool {
+        fallbackToExec ?? true
     }
 }

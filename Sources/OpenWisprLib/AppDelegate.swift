@@ -21,6 +21,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    public func applicationWillTerminate(_ notification: Notification) {
+        CodexTranslationService.shutdown()
+    }
+
     private func setup() {
         do {
             try setupInner()

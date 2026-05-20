@@ -49,6 +49,10 @@ class StatusBarController: NSObject {
     @objc private func copyLastTranscription() {
         guard let delegate = NSApplication.shared.delegate as? AppDelegate,
               let text = delegate.lastTranscription else { return }
+        copyTranscription(text)
+    }
+
+    private func copyTranscription(_ text: String) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
@@ -283,12 +287,38 @@ class StatusBarController: NSObject {
 
         menu.addItem(NSMenuItem.separator())
 
-        let lastText = (NSApplication.shared.delegate as? AppDelegate)?.lastTranscription
+        let delegate = NSApplication.shared.delegate as? AppDelegate
+        let lastText = delegate?.lastTranscription
+        let history = delegate?.transcriptionHistory ?? []
         let copyTitle = copiedFeedback ? "Copied!" : "Copy Last Dictation"
         let copyItem = NSMenuItem(title: copyTitle, action: lastText != nil && !copiedFeedback ? #selector(copyLastTranscription) : nil, keyEquivalent: "c")
         copyItem.target = self
         if lastText == nil || copiedFeedback { copyItem.isEnabled = copiedFeedback }
         menu.addItem(copyItem)
+
+        let historyItem = NSMenuItem(title: "Recent Dictations", action: nil, keyEquivalent: "")
+        let historySubmenu = NSMenu()
+        if history.isEmpty {
+            let emptyItem = NSMenuItem(title: "No dictations", action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            historySubmenu.addItem(emptyItem)
+        } else {
+            for (index, text) in history.enumerated() {
+                let target = MenuItemTarget { [weak self] in
+                    self?.copyTranscription(text)
+                }
+                menuItemTargets.append(target)
+                let item = NSMenuItem(
+                    title: "\(index + 1). \(Self.historyPreview(text))",
+                    action: #selector(MenuItemTarget.invoke),
+                    keyEquivalent: ""
+                )
+                item.target = target
+                historySubmenu.addItem(item)
+            }
+        }
+        historyItem.submenu = historySubmenu
+        menu.addItem(historyItem)
 
         if Config.effectiveMaxRecordings(config.maxRecordings) > 0 {
             let recordings = RecordingStore.listRecordings()
@@ -331,6 +361,16 @@ class StatusBarController: NSObject {
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
         statusItem.menu = menu
+    }
+
+    private static func historyPreview(_ text: String) -> String {
+        let compact = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if compact.count <= 48 {
+            return compact
+        }
+        return String(compact.prefix(48)) + "..."
     }
 
     @objc private func reloadConfiguration() {

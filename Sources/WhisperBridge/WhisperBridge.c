@@ -40,6 +40,41 @@ static void ow_set_error(char **error_message, const char *message) {
     *error_message = ow_strdup(message);
 }
 
+static bool ow_run_full(
+    OWWhisperContext *wrapper,
+    const float *samples,
+    int sample_count,
+    OWWhisperTranscribeOptions options,
+    const char *initial_prompt,
+    char **error_message
+) {
+    struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    params.n_threads = options.threads > 0 ? options.threads : wrapper->threads;
+    params.max_tokens = options.max_tokens;
+    params.audio_ctx = options.audio_ctx;
+    params.no_timestamps = options.no_timestamps;
+    params.single_segment = options.single_segment;
+    params.print_special = false;
+    params.print_progress = false;
+    params.print_realtime = false;
+    params.print_timestamps = false;
+    params.translate = false;
+    params.temperature_inc = 0.0f;
+    params.suppress_nst = options.suppress_nst;
+    params.language = wrapper->language;
+    params.greedy.best_of = 1;
+    if (initial_prompt != NULL && initial_prompt[0] != '\0') {
+        params.initial_prompt = initial_prompt;
+    }
+
+    whisper_reset_timings(wrapper->context);
+    if (whisper_full(wrapper->context, params, samples, sample_count) != 0) {
+        ow_set_error(error_message, "whisper_full failed");
+        return false;
+    }
+    return true;
+}
+
 OWWhisperContext *ow_whisper_create(
     const char *model_path,
     const char *language,
@@ -105,25 +140,7 @@ char *ow_whisper_transcribe(
         return ow_strdup("");
     }
 
-    struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    params.n_threads = options.threads > 0 ? options.threads : wrapper->threads;
-    params.max_tokens = options.max_tokens;
-    params.audio_ctx = options.audio_ctx;
-    params.no_timestamps = options.no_timestamps;
-    params.single_segment = options.single_segment;
-    params.print_special = false;
-    params.print_progress = false;
-    params.print_realtime = false;
-    params.print_timestamps = false;
-    params.translate = false;
-    params.temperature_inc = 0.0f;
-    params.suppress_nst = options.suppress_nst;
-    params.language = wrapper->language;
-    params.greedy.best_of = 1;
-
-    whisper_reset_timings(wrapper->context);
-    if (whisper_full(wrapper->context, params, samples, sample_count) != 0) {
-        ow_set_error(error_message, "whisper_full failed");
+    if (!ow_run_full(wrapper, samples, sample_count, options, NULL, error_message)) {
         return NULL;
     }
 
@@ -156,6 +173,64 @@ char *ow_whisper_transcribe(
     return result;
 }
 
+OWWhisperSegmentResult ow_whisper_transcribe_segments(
+    OWWhisperContext *wrapper,
+    const float *samples,
+    int sample_count,
+    OWWhisperTranscribeOptions options,
+    const char *initial_prompt,
+    char **error_message
+) {
+    OWWhisperSegmentResult empty = { NULL, 0 };
+    if (error_message != NULL) {
+        *error_message = NULL;
+    }
+    if (wrapper == NULL || wrapper->context == NULL) {
+        ow_set_error(error_message, "whisper context is null");
+        return empty;
+    }
+    if (samples == NULL || sample_count <= 0) {
+        return empty;
+    }
+
+    if (!ow_run_full(wrapper, samples, sample_count, options, initial_prompt, error_message)) {
+        return empty;
+    }
+
+    const int segment_count = whisper_full_n_segments(wrapper->context);
+    if (segment_count <= 0) {
+        return empty;
+    }
+
+    OWWhisperSegment *segments = (OWWhisperSegment *) calloc(segment_count, sizeof(OWWhisperSegment));
+    if (segments == NULL) {
+        ow_set_error(error_message, "failed to allocate segment result");
+        return empty;
+    }
+
+    int written = 0;
+    for (int i = 0; i < segment_count; i++) {
+        const char *text = whisper_full_get_segment_text(wrapper->context, i);
+        if (text == NULL) {
+            continue;
+        }
+        char *text_copy = ow_strdup(text);
+        if (text_copy == NULL) {
+            OWWhisperSegmentResult partial = { segments, written };
+            ow_whisper_free_segment_result(partial);
+            ow_set_error(error_message, "failed to allocate segment text");
+            return empty;
+        }
+        segments[written].start_ms = whisper_full_get_segment_t0(wrapper->context, i) * 10;
+        segments[written].end_ms = whisper_full_get_segment_t1(wrapper->context, i) * 10;
+        segments[written].text = text_copy;
+        written += 1;
+    }
+
+    OWWhisperSegmentResult result = { segments, written };
+    return result;
+}
+
 void ow_whisper_free_context(OWWhisperContext *wrapper) {
     if (wrapper == NULL) {
         return;
@@ -173,4 +248,16 @@ void ow_whisper_free_string(char *string) {
     if (string != NULL) {
         free(string);
     }
+}
+
+void ow_whisper_free_segment_result(OWWhisperSegmentResult result) {
+    if (result.segments == NULL) {
+        return;
+    }
+    for (int i = 0; i < result.segment_count; i++) {
+        if (result.segments[i].text != NULL) {
+            free(result.segments[i].text);
+        }
+    }
+    free(result.segments);
 }

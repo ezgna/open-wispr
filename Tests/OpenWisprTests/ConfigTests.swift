@@ -330,10 +330,16 @@ final class ConfigTests: XCTestCase {
             },
             "streamingWhisper": {
                 "enabled": true,
+                "strategy": "localAgreement",
                 "stepMs": 3000,
+                "chunkMs": 5000,
+                "agreementN": 2,
                 "staleMs": 3500,
                 "stopWaitMs": 1500,
+                "stopFinalWaitMs": 1500,
                 "maxSessionSeconds": 30,
+                "maxUnconfirmedSeconds": 30,
+                "stableTailMs": 10000,
                 "fallbackToCli": true
             }
         }
@@ -352,10 +358,16 @@ final class ConfigTests: XCTestCase {
         XCTAssertFalse(config.runtimeProfiles()[1].usesStreamingTranscriber)
         XCTAssertEqual(config.runtimeProfiles()[1].targetLanguage, "ja")
         XCTAssertEqual(config.codexTranslation?.effectiveTimeoutSeconds, 20)
+        XCTAssertEqual(config.effectiveStreamingWhisper.effectiveStrategy, .localAgreement)
         XCTAssertEqual(config.effectiveStreamingWhisper.effectiveStepSeconds, 3.0)
+        XCTAssertEqual(config.effectiveStreamingWhisper.effectiveChunkSeconds, 5.0)
+        XCTAssertEqual(config.effectiveStreamingWhisper.effectiveAgreementN, 2)
         XCTAssertEqual(config.effectiveStreamingWhisper.effectiveStaleSeconds, 3.5)
         XCTAssertEqual(config.effectiveStreamingWhisper.effectiveStopWaitSeconds, 1.5)
+        XCTAssertEqual(config.effectiveStreamingWhisper.effectiveStopFinalWaitSeconds, 1.5)
         XCTAssertEqual(config.effectiveStreamingWhisper.effectiveMaxSessionSeconds, 30)
+        XCTAssertEqual(config.effectiveStreamingWhisper.effectiveMaxUnconfirmedSeconds, 30)
+        XCTAssertEqual(config.effectiveStreamingWhisper.effectiveStableTailSeconds, 10.0)
         XCTAssertTrue(config.effectiveStreamingWhisper.effectiveFallbackToCli)
     }
 

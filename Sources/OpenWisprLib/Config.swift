@@ -489,25 +489,43 @@ public struct DictationProfile: Codable, Equatable {
 
 public struct StreamingWhisperConfig: Codable, Equatable {
     public var enabled: FlexBool?
+    public var strategy: String?
     public var stepMs: Int?
+    public var chunkMs: Int?
+    public var agreementN: Int?
     public var staleMs: Int?
     public var stopWaitMs: Int?
+    public var stopFinalWaitMs: Int?
     public var maxSessionSeconds: Double?
+    public var maxUnconfirmedSeconds: Double?
+    public var stableTailMs: Int?
     public var fallbackToCli: FlexBool?
 
     public init(
         enabled: FlexBool? = nil,
+        strategy: String? = nil,
         stepMs: Int? = nil,
+        chunkMs: Int? = nil,
+        agreementN: Int? = nil,
         staleMs: Int? = nil,
         stopWaitMs: Int? = nil,
+        stopFinalWaitMs: Int? = nil,
         maxSessionSeconds: Double? = nil,
+        maxUnconfirmedSeconds: Double? = nil,
+        stableTailMs: Int? = nil,
         fallbackToCli: FlexBool? = nil
     ) {
         self.enabled = enabled
+        self.strategy = strategy
         self.stepMs = stepMs
+        self.chunkMs = chunkMs
+        self.agreementN = agreementN
         self.staleMs = staleMs
         self.stopWaitMs = stopWaitMs
+        self.stopFinalWaitMs = stopFinalWaitMs
         self.maxSessionSeconds = maxSessionSeconds
+        self.maxUnconfirmedSeconds = maxUnconfirmedSeconds
+        self.stableTailMs = stableTailMs
         self.fallbackToCli = fallbackToCli
     }
 
@@ -515,8 +533,20 @@ public struct StreamingWhisperConfig: Codable, Equatable {
         enabled?.value ?? true
     }
 
+    public var effectiveStrategy: StreamingWhisperStrategy {
+        StreamingWhisperStrategy(rawValue: strategy ?? "") ?? .precompute
+    }
+
     public var effectiveStepSeconds: TimeInterval {
         TimeInterval(max(500, stepMs ?? 3000)) / 1000.0
+    }
+
+    public var effectiveChunkSeconds: TimeInterval {
+        TimeInterval(max(1000, chunkMs ?? 5000)) / 1000.0
+    }
+
+    public var effectiveAgreementN: Int {
+        max(2, agreementN ?? 2)
     }
 
     public var effectiveStaleSeconds: TimeInterval {
@@ -527,13 +557,30 @@ public struct StreamingWhisperConfig: Codable, Equatable {
         TimeInterval(max(0, stopWaitMs ?? 1500)) / 1000.0
     }
 
+    public var effectiveStopFinalWaitSeconds: TimeInterval {
+        TimeInterval(max(0, stopFinalWaitMs ?? 1500)) / 1000.0
+    }
+
     public var effectiveMaxSessionSeconds: TimeInterval {
         max(1, maxSessionSeconds ?? 30)
+    }
+
+    public var effectiveMaxUnconfirmedSeconds: TimeInterval {
+        max(1, maxUnconfirmedSeconds ?? 60)
+    }
+
+    public var effectiveStableTailSeconds: TimeInterval {
+        TimeInterval(max(1000, stableTailMs ?? 10_000)) / 1000.0
     }
 
     public var effectiveFallbackToCli: Bool {
         fallbackToCli?.value ?? true
     }
+}
+
+public enum StreamingWhisperStrategy: String {
+    case precompute
+    case localAgreement
 }
 
 public struct CodexTranslationConfig: Codable, Equatable {

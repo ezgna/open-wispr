@@ -11,7 +11,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     var isPressed = false
     var isReady = false
     var activeProfile: DictationProfile?
-    public var lastTranscription: String?
+    public private(set) var lastTranscription: String?
+    public private(set) var transcriptionHistory: [String] = []
+    private let maxTranscriptionHistory = 5
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         statusBar = StatusBarController()
@@ -329,26 +331,31 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 if profile.usesStreamingTranscriber,
                    self.config.effectiveStreamingWhisper.effectiveEnabled,
                    let streamingWorker = self.streamingWorker {
+                    let streamingConfig = self.config.effectiveStreamingWhisper
+                    let isLocalAgreement = streamingConfig.effectiveStrategy == .localAgreement
+                    let stopWaitSeconds = isLocalAgreement
+                        ? streamingConfig.effectiveStopFinalWaitSeconds
+                        : streamingConfig.effectiveStopWaitSeconds
                     switch streamingWorker.finishSession(
-                        waitSeconds: self.config.effectiveStreamingWhisper.effectiveStopWaitSeconds,
-                        staleSeconds: self.config.effectiveStreamingWhisper.effectiveStaleSeconds
+                        waitSeconds: stopWaitSeconds,
+                        staleSeconds: streamingConfig.effectiveStaleSeconds
                     ) {
                     case .transcript(let text):
                         raw = text
                         Self.logTiming(
                             profile: profile,
-                            stage: "streaming-transcript",
+                            stage: isLocalAgreement ? "agreement-transcript" : "streaming-transcript",
                             duration: Date().timeIntervalSince(whisperStartedAt),
                             details: "chars=\(raw.count)"
                         )
                     case .fallback(let reason):
                         Self.logTiming(
                             profile: profile,
-                            stage: "streaming-fallback-cli",
+                            stage: isLocalAgreement ? "agreement-fallback-cli" : "streaming-fallback-cli",
                             duration: Date().timeIntervalSince(whisperStartedAt),
                             details: "reason=\(reason)"
                         )
-                        guard self.config.effectiveStreamingWhisper.effectiveFallbackToCli else {
+                        guard streamingConfig.effectiveFallbackToCli else {
                             throw StreamingWhisperWorkerError.transcriptionFailed(reason)
                         }
                         raw = try runCLITranscription()
@@ -404,7 +411,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async {
                     let insertStartedAt = Date()
                     if !text.isEmpty {
-                        self.lastTranscription = text
+                        self.rememberTranscription(text)
                         self.inserter.insert(text: text)
                     }
                     self.statusBar.state = .idle
@@ -514,7 +521,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 let text = (self.config.spokenPunctuation?.value ?? false) ? TextPostProcessor.process(raw) : raw
                 DispatchQueue.main.async {
                     if !text.isEmpty {
-                        self.lastTranscription = text
+                        self.rememberTranscription(text)
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(text, forType: .string)
                         self.statusBar.state = .copiedToClipboard
@@ -533,6 +540,18 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                     self.statusBar.state = .idle
                 }
             }
+        }
+    }
+
+    private func rememberTranscription(_ text: String) {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+
+        lastTranscription = value
+        transcriptionHistory.removeAll { $0 == value }
+        transcriptionHistory.insert(value, at: 0)
+        if transcriptionHistory.count > maxTranscriptionHistory {
+            transcriptionHistory.removeLast(transcriptionHistory.count - maxTranscriptionHistory)
         }
     }
 }

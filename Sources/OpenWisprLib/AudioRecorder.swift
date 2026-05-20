@@ -6,7 +6,15 @@ class AudioRecorder {
     private var audioEngine: AVAudioEngine?
     private var isRecording = false
     private var currentOutputURL: URL?
+    private let levelsLock = NSLock()
+    private var levelSumSquares = 0.0
+    private var levelPeak = 0.0
+    private var levelSampleCount = 0
+    private var levelDurationSeconds = 0.0
+    private var levelActiveDurationSeconds = 0.0
+    private(set) var lastRecordingLevels: AudioLevels?
     var preferredDeviceID: AudioDeviceID?
+    var pcmHandler: (([Float]) -> Void)?
 
     func prewarm() {
         guard audioEngine == nil else { return }
@@ -30,6 +38,7 @@ class AudioRecorder {
             isRecording = false
             currentOutputURL = nil
         }
+        pcmHandler = nil
         audioEngine?.stop()
         audioEngine = nil
     }
@@ -42,6 +51,7 @@ class AudioRecorder {
 
     func startRecording(to outputURL: URL) throws {
         guard !isRecording else { return }
+        resetRecordingLevels()
 
         if audioEngine == nil {
             prewarm()
@@ -95,6 +105,10 @@ class AudioRecorder {
             }
 
             if error == nil && convertedBuffer.frameLength > 0 {
+                self.updateRecordingLevels(from: convertedBuffer)
+                if let samples = Self.copyFloatSamples(from: convertedBuffer) {
+                    self.pcmHandler?(samples)
+                }
                 try? file.write(from: convertedBuffer)
             }
         }
@@ -109,11 +123,85 @@ class AudioRecorder {
 
         let url = currentOutputURL
         currentOutputURL = nil
+        pcmHandler = nil
 
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine?.stop()
+        lastRecordingLevels = currentRecordingLevels()
 
         return url
+    }
+
+    private func resetRecordingLevels() {
+        levelsLock.lock()
+        levelSumSquares = 0
+        levelPeak = 0
+        levelSampleCount = 0
+        levelDurationSeconds = 0
+        levelActiveDurationSeconds = 0
+        lastRecordingLevels = nil
+        levelsLock.unlock()
+    }
+
+    private func updateRecordingLevels(from buffer: AVAudioPCMBuffer) {
+        guard let channelData = buffer.floatChannelData else { return }
+
+        let frameLength = Int(buffer.frameLength)
+        let channelCount = Int(buffer.format.channelCount)
+        guard frameLength > 0 && channelCount > 0 else { return }
+
+        var sumSquares = 0.0
+        var peak = 0.0
+        var sampleCount = 0
+        var activeSampleCount = 0
+
+        for channel in 0..<channelCount {
+            let samples = channelData[channel]
+            for frame in 0..<frameLength {
+                let value = Double(samples[frame])
+                let absolute = abs(value)
+                sumSquares += value * value
+                peak = max(peak, absolute)
+                if absolute >= Transcriber.speechSampleLevelThreshold {
+                    activeSampleCount += 1
+                }
+                sampleCount += 1
+            }
+        }
+
+        let sampleRate = buffer.format.sampleRate
+        levelsLock.lock()
+        levelSumSquares += sumSquares
+        levelPeak = max(levelPeak, peak)
+        levelSampleCount += sampleCount
+        levelDurationSeconds += Double(frameLength) / sampleRate
+        levelActiveDurationSeconds += Double(activeSampleCount) / Double(channelCount) / sampleRate
+        levelsLock.unlock()
+    }
+
+    private func currentRecordingLevels() -> AudioLevels {
+        levelsLock.lock()
+        defer { levelsLock.unlock() }
+
+        guard levelSampleCount > 0 else {
+            return AudioLevels(rms: 0, peak: 0, durationSeconds: 0, activeDurationSeconds: 0)
+        }
+
+        return AudioLevels(
+            rms: sqrt(levelSumSquares / Double(levelSampleCount)),
+            peak: levelPeak,
+            durationSeconds: levelDurationSeconds,
+            activeDurationSeconds: levelActiveDurationSeconds
+        )
+    }
+
+    private static func copyFloatSamples(from buffer: AVAudioPCMBuffer) -> [Float]? {
+        guard let channelData = buffer.floatChannelData else { return nil }
+        let frameLength = Int(buffer.frameLength)
+        guard frameLength > 0 else { return [] }
+
+        let samples = channelData[0]
+        return Array(UnsafeBufferPointer(start: samples, count: frameLength))
     }
 
     private func setInputDevice(_ deviceID: AudioDeviceID, on engine: AVAudioEngine) {

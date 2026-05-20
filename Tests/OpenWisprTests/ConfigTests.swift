@@ -309,7 +309,9 @@ final class ConfigTests: XCTestCase {
                     "id": "dictate-ja",
                     "hotkey": {"keyCode": 63, "modifiers": []},
                     "modelSize": "large",
-                    "language": "ja"
+                    "language": "ja",
+                    "polish": true,
+                    "transcriber": "streaming"
                 },
                 {
                     "id": "en-ja",
@@ -325,6 +327,14 @@ final class ConfigTests: XCTestCase {
             "codexTranslation": {
                 "command": "codex",
                 "timeoutSeconds": 20
+            },
+            "streamingWhisper": {
+                "enabled": true,
+                "stepMs": 3000,
+                "staleMs": 3500,
+                "stopWaitMs": 1500,
+                "maxSessionSeconds": 30,
+                "fallbackToCli": true
             }
         }
         """.data(using: .utf8)!
@@ -334,9 +344,19 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(config.runtimeProfiles().count, 2)
         XCTAssertEqual(config.hotkeys.count, 2)
         XCTAssertEqual(config.effectiveModelSize(for: config.runtimeProfiles()[0]), "large-v3")
+        XCTAssertTrue(config.runtimeProfiles()[0].usesPolish)
+        XCTAssertEqual(config.runtimeProfiles()[0].effectiveTranscriber, .streaming)
+        XCTAssertTrue(config.runtimeProfiles()[0].usesStreamingTranscriber)
         XCTAssertEqual(config.runtimeProfiles()[1].effectiveAction, .translate)
+        XCTAssertFalse(config.runtimeProfiles()[1].usesPolish)
+        XCTAssertFalse(config.runtimeProfiles()[1].usesStreamingTranscriber)
         XCTAssertEqual(config.runtimeProfiles()[1].targetLanguage, "ja")
         XCTAssertEqual(config.codexTranslation?.effectiveTimeoutSeconds, 20)
+        XCTAssertEqual(config.effectiveStreamingWhisper.effectiveStepSeconds, 3.0)
+        XCTAssertEqual(config.effectiveStreamingWhisper.effectiveStaleSeconds, 3.5)
+        XCTAssertEqual(config.effectiveStreamingWhisper.effectiveStopWaitSeconds, 1.5)
+        XCTAssertEqual(config.effectiveStreamingWhisper.effectiveMaxSessionSeconds, 30)
+        XCTAssertTrue(config.effectiveStreamingWhisper.effectiveFallbackToCli)
     }
 
     func testRuntimeProfilesFallbackToLegacyHotkeys() throws {
@@ -355,6 +375,7 @@ final class ConfigTests: XCTestCase {
 
         XCTAssertEqual(config.runtimeProfiles().map { $0.id }, ["default", "hotkey-2"])
         XCTAssertEqual(config.runtimeProfiles()[0].effectiveAction, .transcribe)
+        XCTAssertEqual(config.runtimeProfiles()[0].effectiveTranscriber, .cli)
     }
 }
 

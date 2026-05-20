@@ -47,4 +47,16 @@ final class CodexTranslationServiceTests: XCTestCase {
         XCTAssertEqual(config.effectiveAppServerPort, 8768)
         XCTAssertTrue(config.shouldFallbackToExec)
     }
+
+    func testMakePolishPromptPreservesMixedLanguage() {
+        let prompt = CodexTranslationService.makePolishPrompt(
+            text: "タイプレスみたいに codex sdk と Whisper を使いたい",
+            language: "ja"
+        )
+
+        XCTAssertTrue(prompt.contains("入力言語を保ったまま"))
+        XCTAssertTrue(prompt.contains("混ざっている場合は、その混在を保つ"))
+        XCTAssertTrue(prompt.contains("不必要に翻訳しない"))
+        XCTAssertTrue(prompt.contains("codex sdk"))
+    }
 }

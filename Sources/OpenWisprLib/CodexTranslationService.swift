@@ -11,6 +11,11 @@ public final class CodexTranslationService {
         guard !trimmed.isEmpty else { return "" }
 
         let config = config ?? CodexTranslationConfig()
+        let prompt = makePrompt(
+            text: trimmed,
+            sourceLanguage: sourceLanguage,
+            targetLanguage: targetLanguage
+        )
         if config.effectiveBackend == .appServer {
             do {
                 return try CodexAppServerTranslationService.shared.translate(
@@ -25,6 +30,36 @@ public final class CodexTranslationService {
             }
         }
 
+        return try runWithExec(prompt: prompt, config: config)
+    }
+
+    public static func polish(
+        text: String,
+        language: String,
+        config: CodexTranslationConfig?
+    ) throws -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        let config = config ?? CodexTranslationConfig()
+        let prompt = makePolishPrompt(text: trimmed, language: language)
+        if config.effectiveBackend == .appServer {
+            do {
+                return try CodexAppServerTranslationService.shared.polish(
+                    text: trimmed,
+                    language: language,
+                    config: config
+                )
+            } catch {
+                guard config.shouldFallbackToExec else { throw error }
+                print("Codex app-server polish failed, falling back to codex exec: \(error.localizedDescription)")
+            }
+        }
+
+        return try runWithExec(prompt: prompt, config: config)
+    }
+
+    private static func runWithExec(prompt: String, config: CodexTranslationConfig) throws -> String {
         let outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("open-wispr-codex-\(UUID().uuidString).txt")
         defer { try? FileManager.default.removeItem(at: outputURL) }
@@ -47,11 +82,7 @@ public final class CodexTranslationService {
         process.standardError = stderrPipe
 
         try process.run()
-        stdinPipe.fileHandleForWriting.write(Data(makePrompt(
-            text: trimmed,
-            sourceLanguage: sourceLanguage,
-            targetLanguage: targetLanguage
-        ).utf8))
+        stdinPipe.fileHandleForWriting.write(Data(prompt.utf8))
         try? stdinPipe.fileHandleForWriting.close()
 
         var stdoutData = Data()
@@ -143,6 +174,31 @@ public final class CodexTranslationService {
         """
     }
 
+    static func makePolishPrompt(text: String, language: String) -> String {
+        """
+        あなたは音声入力の後処理関数です。
+        Whisper の文字起こし結果を、入力言語を保ったまま自然で読みやすい文章に整えてください。
+
+        入力の主な言語:
+        \(languageName(language))
+
+        条件:
+        - 整形済み本文だけを返す
+        - 説明、引用符、Markdown、前置きは出さない
+        - 意味を変えない。情報を足さない
+        - 日本語、英語、製品名、コード、コマンド、専門用語が混ざっている場合は、その混在を保つ
+        - 日本語内の英語表記や固有名詞を不必要に翻訳しない
+        - 誤認識と思われる箇所は文脈に合わせて自然に直す
+        - 句読点、改行、段落を自然に補う
+        - フィラー、言い直し、重複、不要な口癖を取り除く
+        - 技術用語、固有名詞、アプリ名、ライブラリ名は一般的な表記へ整える
+        - 不確かな専門用語は強く推測しすぎず、元の音に近い自然な表記を優先する
+
+        テキスト:
+        \(text)
+        """
+    }
+
     private static func languageName(_ code: String) -> String {
         switch code.lowercased() {
         case "ja", "japanese":
@@ -174,11 +230,11 @@ enum CodexTranslationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .timedOut:
-            return "Codex 翻訳がタイムアウトしました"
+            return "Codex 処理がタイムアウトしました"
         case .emptyResponse:
-            return "Codex 翻訳の応答が空でした"
+            return "Codex 処理の応答が空でした"
         case .failed(let message):
-            return "Codex 翻訳に失敗しました: \(message)"
+            return "Codex 処理に失敗しました: \(message)"
         }
     }
 }

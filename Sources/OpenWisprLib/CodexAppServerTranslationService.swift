@@ -15,25 +15,58 @@ final class CodexAppServerTranslationService {
         targetLanguage: String,
         config: CodexTranslationConfig
     ) throws -> String {
+        let prompt = CodexTranslationService.makePrompt(
+            text: text,
+            sourceLanguage: sourceLanguage,
+            targetLanguage: targetLanguage
+        )
+        return try run(
+            prompt: prompt,
+            config: config,
+            baseInstructions: "あなたは翻訳関数です。最終的な翻訳文だけを返してください。ツールは使わず、説明もしません。",
+            developerInstructions: "意味を保って自然かつ正確に翻訳してください。出力はプレーンテキストだけにしてください。"
+        )
+    }
+
+    func polish(
+        text: String,
+        language: String,
+        config: CodexTranslationConfig
+    ) throws -> String {
+        let prompt = CodexTranslationService.makePolishPrompt(text: text, language: language)
+        return try run(
+            prompt: prompt,
+            config: config,
+            baseInstructions: "あなたは音声入力の整形関数です。最終的な整形済み本文だけを返してください。ツールは使わず、説明もしません。",
+            developerInstructions: "入力言語と意味を保ち、句読点、改行、専門用語表記、誤認識を自然に整えてください。出力はプレーンテキストだけにしてください。"
+        )
+    }
+
+    private func run(
+        prompt: String,
+        config: CodexTranslationConfig,
+        baseInstructions: String,
+        developerInstructions: String
+    ) throws -> String {
         lock.lock()
         defer { lock.unlock() }
 
         let deadline = Date().addingTimeInterval(config.effectiveTimeoutSeconds)
         do {
-            return try translateLocked(
-                text: text,
-                sourceLanguage: sourceLanguage,
-                targetLanguage: targetLanguage,
+            return try runLocked(
+                prompt: prompt,
                 config: config,
+                baseInstructions: baseInstructions,
+                developerInstructions: developerInstructions,
                 deadline: deadline
             )
         } catch {
             resetConnection(terminateProcess: true)
-            return try translateLocked(
-                text: text,
-                sourceLanguage: sourceLanguage,
-                targetLanguage: targetLanguage,
+            return try runLocked(
+                prompt: prompt,
                 config: config,
+                baseInstructions: baseInstructions,
+                developerInstructions: developerInstructions,
                 deadline: Date().addingTimeInterval(config.effectiveTimeoutSeconds)
             )
         }
@@ -45,22 +78,27 @@ final class CodexAppServerTranslationService {
         resetConnection(terminateProcess: true)
     }
 
-    private func translateLocked(
-        text: String,
-        sourceLanguage: String,
-        targetLanguage: String,
+    private func runLocked(
+        prompt: String,
         config: CodexTranslationConfig,
+        baseInstructions: String,
+        developerInstructions: String,
         deadline: Date
     ) throws -> String {
+        let connectStartedAt = Date()
         try ensureConnected(config: config, deadline: deadline)
-        let threadID = try startThread(config: config, deadline: deadline)
+        Self.logTiming(stage: "appserver-connect", duration: Date().timeIntervalSince(connectStartedAt))
+        let threadStartedAt = Date()
+        let threadID = try startThread(
+            config: config,
+            deadline: deadline,
+            baseInstructions: baseInstructions,
+            developerInstructions: developerInstructions
+        )
+        Self.logTiming(stage: "thread-start", duration: Date().timeIntervalSince(threadStartedAt))
         defer { try? unsubscribe(threadID: threadID) }
 
-        let prompt = CodexTranslationService.makePrompt(
-            text: text,
-            sourceLanguage: sourceLanguage,
-            targetLanguage: targetLanguage
-        )
+        let turnStartedAt = Date()
         let turnRequestID = try sendRequest(method: "turn/start", params: [
             "threadId": threadID,
             "input": [
@@ -107,6 +145,11 @@ final class CodexAppServerTranslationService {
                     let result = streamedText.isEmpty ? completedText : streamedText
                     let cleaned = CodexTranslationService.clean(result)
                     guard !cleaned.isEmpty else { throw CodexTranslationError.emptyResponse }
+                    Self.logTiming(
+                        stage: "turn-completed",
+                        duration: Date().timeIntervalSince(turnStartedAt),
+                        details: "chars=\(cleaned.count)"
+                    )
                     return cleaned
                 }
             case "error":
@@ -117,6 +160,15 @@ final class CodexAppServerTranslationService {
         }
 
         throw CodexTranslationError.timedOut
+    }
+
+    private static func logTiming(stage: String, duration: TimeInterval, details: String? = nil) {
+        let suffix = details.map { " \($0)" } ?? ""
+        TimingLog.write("Timing: codex stage=\(stage) duration=\(format(duration))s\(suffix)")
+    }
+
+    private static func format(_ value: Double) -> String {
+        String(format: "%.3f", value)
     }
 
     private func ensureConnected(config: CodexTranslationConfig, deadline: Date) throws {
@@ -146,15 +198,20 @@ final class CodexAppServerTranslationService {
         throw lastError ?? CodexTranslationError.timedOut
     }
 
-    private func startThread(config: CodexTranslationConfig, deadline: Date) throws -> String {
+    private func startThread(
+        config: CodexTranslationConfig,
+        deadline: Date,
+        baseInstructions: String,
+        developerInstructions: String
+    ) throws -> String {
         var params: [String: Any] = [
             "model": config.effectiveModel,
             "cwd": FileManager.default.temporaryDirectory.path,
             "approvalPolicy": "never",
             "sandbox": "read-only",
             "ephemeral": true,
-            "baseInstructions": "あなたは翻訳関数です。最終的な翻訳文だけを返してください。ツールは使わず、説明もしません。",
-            "developerInstructions": "意味を保って自然かつ正確に翻訳してください。出力はプレーンテキストだけにしてください。",
+            "baseInstructions": baseInstructions,
+            "developerInstructions": developerInstructions,
             "config": [
                 "model_reasoning_effort": config.effectiveReasoningEffort,
                 "web_search": "disabled",

@@ -7,6 +7,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     var transcriber: Transcriber!
     var inserter: TextInserter!
     var config: Config!
+    var streamingWorker: StreamingWhisperWorker?
     var isPressed = false
     var isReady = false
     var activeProfile: DictationProfile?
@@ -22,6 +23,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
+        streamingWorker?.shutdown()
         CodexTranslationService.shutdown()
     }
 
@@ -87,6 +89,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         try ensureRequiredModelsAvailable(config)
+        loadStreamingWorkerIfNeeded(config)
 
         recorder.prewarm()
 
@@ -122,6 +125,28 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         print("Ready.")
     }
 
+    private func loadStreamingWorkerIfNeeded(_ config: Config) {
+        streamingWorker?.shutdown()
+        streamingWorker = nil
+
+        let streamingConfig = config.effectiveStreamingWhisper
+        guard streamingConfig.effectiveEnabled else { return }
+        guard let profile = config.runtimeProfiles().first(where: { $0.usesStreamingTranscriber }) else { return }
+
+        do {
+            let worker = try StreamingWhisperWorker.make(
+                modelSize: config.effectiveModelSize(for: profile),
+                language: config.effectiveLanguage(for: profile),
+                config: streamingConfig
+            ) { stage, duration, details in
+                Self.logTiming(profile: profile, stage: stage, duration: duration, details: details)
+            }
+            streamingWorker = worker
+        } catch {
+            print("Warning: streaming Whisper worker disabled: \(error.localizedDescription)")
+        }
+    }
+
     public func reloadConfig() {
         let newConfig = Config.load()
         applyConfigChange(newConfig)
@@ -140,6 +165,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         transcriber = Transcriber(modelSize: config.modelSize, language: config.language)
         transcriber.spokenPunctuation = config.spokenPunctuation?.value ?? false
         inserter = TextInserter()
+        loadStreamingWorkerIfNeeded(config)
 
         hotkeyRouter?.stop()
         let router = ProfileHotkeyManager(
@@ -215,6 +241,15 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         isPressed = true
         activeProfile = profile
         statusBar.state = .recording
+        recorder.pcmHandler = nil
+        if profile.usesStreamingTranscriber,
+           config.effectiveStreamingWhisper.effectiveEnabled,
+           let streamingWorker {
+            streamingWorker.startSession()
+            recorder.pcmHandler = { [weak streamingWorker] samples in
+                streamingWorker?.appendPCM(samples)
+            }
+        }
         do {
             let outputURL: URL
             if Config.effectiveMaxRecordings(config.maxRecordings) == 0 {
@@ -226,6 +261,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             print("Error: \(error.localizedDescription)")
             isPressed = false
+            recorder.pcmHandler = nil
             statusBar.state = .idle
         }
     }
@@ -233,12 +269,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleRecordingStop() {
         guard isPressed else { return }
         isPressed = false
+        let stopStartedAt = Date()
 
         guard let audioURL = recorder.stopRecording() else {
             statusBar.state = .idle
             activeProfile = nil
             return
         }
+        let recordedLevels = recorder.lastRecordingLevels
         let profile = activeProfile ?? config.runtimeProfiles()[0]
         activeProfile = nil
 
@@ -246,6 +284,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
+            let pipelineStartedAt = Date()
             let maxRecordings = Config.effectiveMaxRecordings(self.config.maxRecordings)
             defer {
                 if maxRecordings == 0 {
@@ -253,34 +292,135 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             do {
-                let transcriber = Transcriber(
-                    modelSize: self.config.effectiveModelSize(for: profile),
-                    language: self.config.effectiveLanguage(for: profile)
-                )
-                transcriber.spokenPunctuation = self.config.spokenPunctuation?.value ?? false
-                let raw = try transcriber.transcribe(audioURL: audioURL)
+                if let recordedLevels,
+                   Transcriber.shouldSkipForSilence(levels: recordedLevels) {
+                    Self.logTiming(
+                        profile: profile,
+                        stage: "silence-skip",
+                        duration: Date().timeIntervalSince(pipelineStartedAt),
+                        details: "rms=\(Self.format(recordedLevels.rms)) active=\(Self.format(recordedLevels.activeDurationSeconds))s duration=\(Self.format(recordedLevels.durationSeconds))s"
+                    )
+                    DispatchQueue.main.async {
+                        self.statusBar.state = .idle
+                        self.statusBar.buildMenu()
+                    }
+                    return
+                }
+
+                let runCLITranscription = { () throws -> String in
+                    let transcriber = Transcriber(
+                        modelSize: self.config.effectiveModelSize(for: profile),
+                        language: self.config.effectiveLanguage(for: profile)
+                    )
+                    transcriber.spokenPunctuation = self.config.spokenPunctuation?.value ?? false
+                    let whisperStartedAt = Date()
+                    let raw = try transcriber.transcribe(audioURL: audioURL)
+                    Self.logTiming(
+                        profile: profile,
+                        stage: "whisper",
+                        duration: Date().timeIntervalSince(whisperStartedAt),
+                        details: "chars=\(raw.count)"
+                    )
+                    return raw
+                }
+
+                let raw: String
+                let whisperStartedAt = Date()
+                if profile.usesStreamingTranscriber,
+                   self.config.effectiveStreamingWhisper.effectiveEnabled,
+                   let streamingWorker = self.streamingWorker {
+                    switch streamingWorker.finishSession(
+                        waitSeconds: self.config.effectiveStreamingWhisper.effectiveStopWaitSeconds,
+                        staleSeconds: self.config.effectiveStreamingWhisper.effectiveStaleSeconds
+                    ) {
+                    case .transcript(let text):
+                        raw = text
+                        Self.logTiming(
+                            profile: profile,
+                            stage: "streaming-transcript",
+                            duration: Date().timeIntervalSince(whisperStartedAt),
+                            details: "chars=\(raw.count)"
+                        )
+                    case .fallback(let reason):
+                        Self.logTiming(
+                            profile: profile,
+                            stage: "streaming-fallback-cli",
+                            duration: Date().timeIntervalSince(whisperStartedAt),
+                            details: "reason=\(reason)"
+                        )
+                        guard self.config.effectiveStreamingWhisper.effectiveFallbackToCli else {
+                            throw StreamingWhisperWorkerError.transcriptionFailed(reason)
+                        }
+                        raw = try runCLITranscription()
+                    }
+                } else {
+                    raw = try runCLITranscription()
+                }
+
+                let postProcessStartedAt = Date()
                 var text = (self.config.spokenPunctuation?.value ?? false) ? TextPostProcessor.process(raw) : raw
+                Self.logTiming(
+                    profile: profile,
+                    stage: "postprocess",
+                    duration: Date().timeIntervalSince(postProcessStartedAt),
+                    details: "chars=\(text.count)"
+                )
                 if profile.usesTranslation {
                     guard let targetLanguage = profile.targetLanguage else {
                         throw CodexTranslationError.failed("profile '\(profile.id)' に targetLanguage が必要です")
                     }
+                    let translateStartedAt = Date()
                     text = try CodexTranslationService.translate(
                         text: text,
                         sourceLanguage: self.config.effectiveLanguage(for: profile),
                         targetLanguage: targetLanguage,
                         config: self.config.codexTranslation
                     )
+                    Self.logTiming(
+                        profile: profile,
+                        stage: "codex-translate",
+                        duration: Date().timeIntervalSince(translateStartedAt),
+                        details: "chars=\(text.count)"
+                    )
+                } else if profile.usesPolish {
+                    let polishStartedAt = Date()
+                    text = try CodexTranslationService.polish(
+                        text: text,
+                        language: self.config.effectiveLanguage(for: profile),
+                        config: self.config.codexTranslation
+                    )
+                    Self.logTiming(
+                        profile: profile,
+                        stage: "codex-polish",
+                        duration: Date().timeIntervalSince(polishStartedAt),
+                        details: "chars=\(text.count)"
+                    )
                 }
                 if maxRecordings > 0 {
+                    let pruneStartedAt = Date()
                     RecordingStore.prune(maxCount: maxRecordings)
+                    Self.logTiming(profile: profile, stage: "prune", duration: Date().timeIntervalSince(pruneStartedAt))
                 }
                 DispatchQueue.main.async {
+                    let insertStartedAt = Date()
                     if !text.isEmpty {
                         self.lastTranscription = text
                         self.inserter.insert(text: text)
                     }
                     self.statusBar.state = .idle
                     self.statusBar.buildMenu()
+                    Self.logTiming(
+                        profile: profile,
+                        stage: "insert-ui",
+                        duration: Date().timeIntervalSince(insertStartedAt),
+                        details: "inserted=\(!text.isEmpty)"
+                    )
+                    Self.logTiming(
+                        profile: profile,
+                        stage: "total",
+                        duration: Date().timeIntervalSince(stopStartedAt),
+                        details: "pipeline=\(Self.format(Date().timeIntervalSince(pipelineStartedAt)))s"
+                    )
                 }
             } catch {
                 if maxRecordings > 0 {
@@ -299,6 +439,20 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    private static func logTiming(
+        profile: DictationProfile,
+        stage: String,
+        duration: TimeInterval,
+        details: String? = nil
+    ) {
+        let suffix = details.map { " \($0)" } ?? ""
+        TimingLog.write("Timing: profile=\(profile.id) stage=\(stage) duration=\(format(duration))s\(suffix)")
+    }
+
+    private static func format(_ value: Double) -> String {
+        String(format: "%.3f", value)
     }
 
     private func requiredModelSizes(_ config: Config) -> [String] {

@@ -6,7 +6,29 @@ let package = Package(
     platforms: [.macOS(.v13)],
     targets: [
         .target(
+            name: "WhisperBridge",
+            path: "Sources/WhisperBridge",
+            publicHeadersPath: "include",
+            cSettings: [
+                .unsafeFlags(["-I/opt/homebrew/include"]),
+            ],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-L/opt/homebrew/lib",
+                    "-L/opt/homebrew/opt/ggml/lib",
+                    "-Xlinker", "-rpath",
+                    "-Xlinker", "/opt/homebrew/lib",
+                    "-Xlinker", "-rpath",
+                    "-Xlinker", "/opt/homebrew/opt/ggml/lib",
+                ]),
+                .linkedLibrary("whisper"),
+                .linkedLibrary("ggml"),
+                .linkedLibrary("ggml-base"),
+            ]
+        ),
+        .target(
             name: "OpenWisprLib",
+            dependencies: ["WhisperBridge"],
             path: "Sources/OpenWisprLib",
             linkerSettings: [
                 .linkedFramework("CoreAudio"),

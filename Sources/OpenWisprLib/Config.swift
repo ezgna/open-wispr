@@ -12,6 +12,7 @@ public struct Config: Codable {
     public var modelSize: String
     public var language: String
     public var codexTranslation: CodexTranslationConfig?
+    public var streamingWhisper: StreamingWhisperConfig?
     public var spokenPunctuation: FlexBool?
     public var maxRecordings: Int?
     public var toggleMode: FlexBool?
@@ -68,7 +69,9 @@ public struct Config: Codable {
                 language: nil,
                 action: nil,
                 targetLanguage: nil,
-                translator: nil
+                translator: nil,
+                polish: nil,
+                transcriber: nil
             )
         }
     }
@@ -81,6 +84,10 @@ public struct Config: Codable {
         profile.language ?? language
     }
 
+    public var effectiveStreamingWhisper: StreamingWhisperConfig {
+        streamingWhisper ?? StreamingWhisperConfig()
+    }
+
     private enum CodingKeys: String, CodingKey {
         case hotkey
         case hotkeys
@@ -89,6 +96,7 @@ public struct Config: Codable {
         case modelSize
         case language
         case codexTranslation
+        case streamingWhisper
         case spokenPunctuation
         case maxRecordings
         case toggleMode
@@ -117,6 +125,7 @@ public struct Config: Codable {
         self.modelSize = try c.decode(String.self, forKey: .modelSize)
         self.language = try c.decode(String.self, forKey: .language)
         self.codexTranslation = try c.decodeIfPresent(CodexTranslationConfig.self, forKey: .codexTranslation)
+        self.streamingWhisper = try c.decodeIfPresent(StreamingWhisperConfig.self, forKey: .streamingWhisper)
         self.spokenPunctuation = try c.decodeIfPresent(FlexBool.self, forKey: .spokenPunctuation)
         self.maxRecordings = try c.decodeIfPresent(Int.self, forKey: .maxRecordings)
         self.toggleMode = try c.decodeIfPresent(FlexBool.self, forKey: .toggleMode)
@@ -132,6 +141,7 @@ public struct Config: Codable {
         try c.encode(modelSize, forKey: .modelSize)
         try c.encode(language, forKey: .language)
         try c.encodeIfPresent(codexTranslation, forKey: .codexTranslation)
+        try c.encodeIfPresent(streamingWhisper, forKey: .streamingWhisper)
         try c.encodeIfPresent(spokenPunctuation, forKey: .spokenPunctuation)
         try c.encodeIfPresent(maxRecordings, forKey: .maxRecordings)
         try c.encodeIfPresent(toggleMode, forKey: .toggleMode)
@@ -145,6 +155,7 @@ public struct Config: Codable {
         modelSize: String,
         language: String,
         codexTranslation: CodexTranslationConfig? = nil,
+        streamingWhisper: StreamingWhisperConfig? = nil,
         spokenPunctuation: FlexBool?,
         maxRecordings: Int?,
         toggleMode: FlexBool?,
@@ -163,6 +174,7 @@ public struct Config: Codable {
         self.modelSize = modelSize
         self.language = language
         self.codexTranslation = codexTranslation
+        self.streamingWhisper = streamingWhisper
         self.spokenPunctuation = spokenPunctuation
         self.maxRecordings = maxRecordings
         self.toggleMode = toggleMode
@@ -416,6 +428,11 @@ public enum DictationAction: String, Codable {
     case translate
 }
 
+public enum DictationTranscriber: String {
+    case cli
+    case streaming
+}
+
 public struct DictationProfile: Codable, Equatable {
     public var id: String
     public var hotkey: HotkeyConfig
@@ -424,6 +441,8 @@ public struct DictationProfile: Codable, Equatable {
     public var action: String?
     public var targetLanguage: String?
     public var translator: String?
+    public var polish: FlexBool?
+    public var transcriber: String?
 
     public init(
         id: String,
@@ -432,7 +451,9 @@ public struct DictationProfile: Codable, Equatable {
         language: String?,
         action: String?,
         targetLanguage: String?,
-        translator: String?
+        translator: String?,
+        polish: FlexBool? = nil,
+        transcriber: String? = nil
     ) {
         self.id = id
         self.hotkey = hotkey
@@ -441,6 +462,8 @@ public struct DictationProfile: Codable, Equatable {
         self.action = action
         self.targetLanguage = targetLanguage
         self.translator = translator
+        self.polish = polish
+        self.transcriber = transcriber
     }
 
     public var effectiveAction: DictationAction {
@@ -449,6 +472,67 @@ public struct DictationProfile: Codable, Equatable {
 
     public var usesTranslation: Bool {
         effectiveAction == .translate || targetLanguage != nil
+    }
+
+    public var usesPolish: Bool {
+        (polish?.value ?? false) && !usesTranslation
+    }
+
+    public var effectiveTranscriber: DictationTranscriber {
+        DictationTranscriber(rawValue: transcriber ?? "") ?? .cli
+    }
+
+    public var usesStreamingTranscriber: Bool {
+        effectiveTranscriber == .streaming && !usesTranslation
+    }
+}
+
+public struct StreamingWhisperConfig: Codable, Equatable {
+    public var enabled: FlexBool?
+    public var stepMs: Int?
+    public var staleMs: Int?
+    public var stopWaitMs: Int?
+    public var maxSessionSeconds: Double?
+    public var fallbackToCli: FlexBool?
+
+    public init(
+        enabled: FlexBool? = nil,
+        stepMs: Int? = nil,
+        staleMs: Int? = nil,
+        stopWaitMs: Int? = nil,
+        maxSessionSeconds: Double? = nil,
+        fallbackToCli: FlexBool? = nil
+    ) {
+        self.enabled = enabled
+        self.stepMs = stepMs
+        self.staleMs = staleMs
+        self.stopWaitMs = stopWaitMs
+        self.maxSessionSeconds = maxSessionSeconds
+        self.fallbackToCli = fallbackToCli
+    }
+
+    public var effectiveEnabled: Bool {
+        enabled?.value ?? true
+    }
+
+    public var effectiveStepSeconds: TimeInterval {
+        TimeInterval(max(500, stepMs ?? 3000)) / 1000.0
+    }
+
+    public var effectiveStaleSeconds: TimeInterval {
+        TimeInterval(max(500, staleMs ?? 3500)) / 1000.0
+    }
+
+    public var effectiveStopWaitSeconds: TimeInterval {
+        TimeInterval(max(0, stopWaitMs ?? 1500)) / 1000.0
+    }
+
+    public var effectiveMaxSessionSeconds: TimeInterval {
+        max(1, maxSessionSeconds ?? 30)
+    }
+
+    public var effectiveFallbackToCli: Bool {
+        fallbackToCli?.value ?? true
     }
 }
 

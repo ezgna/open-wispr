@@ -5,6 +5,11 @@ public class Transcriber {
     private let language: String
     public var spokenPunctuation: Bool = false
 
+    static let silenceRMSLevelThreshold = 0.012
+    static let speechSampleLevelThreshold = 0.02
+    static let minimumRecordingDurationSeconds = 0.20
+    static let minimumSpeechDurationSeconds = 0.12
+
     public init(modelSize: String = "base.en", language: String = "en") {
         self.modelSize = modelSize
         self.language = language
@@ -61,6 +66,19 @@ public class Transcriber {
         }
 
         return output
+    }
+
+    static func shouldSkipForSilence(levels: AudioLevels) -> Bool {
+        if levels.durationSeconds < minimumRecordingDurationSeconds {
+            return true
+        }
+        if levels.rms < silenceRMSLevelThreshold {
+            return true
+        }
+        if levels.activeDurationSeconds < minimumSpeechDurationSeconds {
+            return true
+        }
+        return false
     }
 
     private static let knownMarkers: Set<String> = [
@@ -152,6 +170,13 @@ public class Transcriber {
 
         return nil
     }
+}
+
+struct AudioLevels: Equatable {
+    let rms: Double
+    let peak: Double
+    let durationSeconds: Double
+    let activeDurationSeconds: Double
 }
 
 enum TranscriberError: LocalizedError {

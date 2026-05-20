@@ -50,4 +50,28 @@ final class TranscriberTests: XCTestCase {
     func testKnownMarkerStrippedUnknownPreserved() {
         XCTAssertEqual(Transcriber.stripWhisperMarkers("[BLANK_AUDIO] see [1]"), "see [1]")
     }
+
+    func testSilenceGateSkipsSilentAudio() {
+        let levels = AudioLevels(rms: 0, peak: 0, durationSeconds: 1, activeDurationSeconds: 0)
+
+        XCTAssertTrue(Transcriber.shouldSkipForSilence(levels: levels))
+    }
+
+    func testSilenceGateKeepsAudibleAudio() {
+        let levels = AudioLevels(rms: 0.05, peak: 0.2, durationSeconds: 1, activeDurationSeconds: 0.4)
+
+        XCTAssertFalse(Transcriber.shouldSkipForSilence(levels: levels))
+    }
+
+    func testSilenceGateSkipsShortClick() {
+        let levels = AudioLevels(rms: 0.05, peak: 1, durationSeconds: 1, activeDurationSeconds: 0.03)
+
+        XCTAssertTrue(Transcriber.shouldSkipForSilence(levels: levels))
+    }
+
+    func testSilenceGateSkipsTooShortRecording() {
+        let levels = AudioLevels(rms: 0.2, peak: 0.5, durationSeconds: 0.05, activeDurationSeconds: 0.05)
+
+        XCTAssertTrue(Transcriber.shouldSkipForSilence(levels: levels))
+    }
 }

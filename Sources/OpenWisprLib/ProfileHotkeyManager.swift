@@ -21,6 +21,18 @@ final class ProfileHotkeyManager {
         self.toggleMode = toggleMode
     }
 
+    init(
+        profiles: [DictationProfile],
+        toggleMode: Bool = false,
+        onKeyDown: ((DictationProfile) -> Void)?,
+        onKeyUp: ((DictationProfile) -> Void)? = nil
+    ) {
+        self.profiles = profiles
+        self.toggleMode = toggleMode
+        self.onKeyDown = onKeyDown
+        self.onKeyUp = onKeyUp
+    }
+
     func start(
         onKeyDown: @escaping (DictationProfile) -> Void,
         onKeyUp: @escaping (DictationProfile) -> Void
@@ -43,7 +55,7 @@ final class ProfileHotkeyManager {
         activeProfile = nil
     }
 
-    private func handleEvent(_ event: NSEvent) {
+    func handleEvent(_ event: NSEvent) {
         if event.type == .flagsChanged, Self.isModifierOnlyKey(event.keyCode) {
             if updateModifierState(event) {
                 handlePress(event)
@@ -72,14 +84,19 @@ final class ProfileHotkeyManager {
             return
         }
 
-        guard let candidate = matchingProfile(for: event) else { return }
-
-        if pendingProfile != nil {
+        let candidate = matchingProfile(for: event)
+        if pendingProfile != nil, (candidate != nil || toggleMode) {
             cancelPendingStart()
         }
 
+        guard let candidate else { return }
+
         if shouldDefer(candidate) {
-            schedulePendingStart(candidate)
+            if toggleMode {
+                holdPendingStartUntilRelease(candidate)
+            } else {
+                schedulePendingStart(candidate)
+            }
         } else {
             begin(candidate)
         }
@@ -128,6 +145,11 @@ final class ProfileHotkeyManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.deferredStartDelay, execute: workItem)
     }
 
+    private func holdPendingStartUntilRelease(_ profile: DictationProfile) {
+        pendingProfile = profile
+        pendingWorkItem = nil
+    }
+
     private func cancelPendingStart() {
         pendingWorkItem?.cancel()
         pendingWorkItem = nil
@@ -149,6 +171,9 @@ final class ProfileHotkeyManager {
             let current = currentModifiers(event)
             guard let ownFlag = Self.ownModifierFlag(for: hotkey.keyCode) else { return false }
             guard current & ownFlag == ownFlag else { return false }
+            if hotkey.modifierFlags == 0 {
+                guard event.type == .flagsChanged, event.keyCode == hotkey.keyCode else { return false }
+            }
             return (current & ~ownFlag) == hotkey.modifierFlags
         }
 

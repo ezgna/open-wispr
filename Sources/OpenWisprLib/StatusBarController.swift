@@ -137,7 +137,12 @@ class StatusBarController: NSObject {
         let langItem = NSMenuItem(title: "Language: \(langName)", action: nil, keyEquivalent: "")
         let langSubmenu = NSMenu()
 
-        for (index, lang) in Config.supportedLanguages.enumerated() {
+        let sortedLanguages = Config.supportedLanguages
+            .filter { $0.code != "auto" }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let menuLanguages = Config.supportedLanguages.filter { $0.code == "auto" } + sortedLanguages
+
+        for (index, lang) in menuLanguages.enumerated() {
             if index == 1 {
                 langSubmenu.addItem(NSMenuItem.separator())
             }
@@ -173,12 +178,19 @@ class StatusBarController: NSObject {
         let modelItem = NSMenuItem(title: "Model: \(config.modelSize)", action: nil, keyEquivalent: "")
         let modelSubmenu = NSMenu()
 
-        let englishModels = Config.supportedModels.filter { Config.isEnglishOnlyModel($0) }
-        let multilingualModels = Config.supportedModels.filter { !Config.isEnglishOnlyModel($0) }
+        let installedModels = Config.supportedModels.filter { Transcriber.modelExists(modelSize: $0) }
+        let englishModels = installedModels.filter { Config.isEnglishOnlyModel($0) }
+        let multilingualModels = installedModels.filter { !Config.isEnglishOnlyModel($0) }
 
         let engHeader = NSMenuItem(title: "English", action: nil, keyEquivalent: "")
         engHeader.isEnabled = false
         modelSubmenu.addItem(engHeader)
+
+        if englishModels.isEmpty {
+            let emptyItem = NSMenuItem(title: "  No installed English models", action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            modelSubmenu.addItem(emptyItem)
+        }
 
         for model in englishModels {
             let target = MenuItemTarget { [weak self] in
@@ -204,6 +216,12 @@ class StatusBarController: NSObject {
         let multiHeader = NSMenuItem(title: "Multilingual", action: nil, keyEquivalent: "")
         multiHeader.isEnabled = false
         modelSubmenu.addItem(multiHeader)
+
+        if multilingualModels.isEmpty {
+            let emptyItem = NSMenuItem(title: "  No installed multilingual models", action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            modelSubmenu.addItem(emptyItem)
+        }
 
         for model in multilingualModels {
             let target = MenuItemTarget { [weak self] in

@@ -133,6 +133,124 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(config.toggleMode?.value, false)
     }
 
+    func testConfigDefaultHotkeysEnabledIsTrue() {
+        let config = Config.defaultConfig
+        XCTAssertTrue(config.effectiveHotkeysEnabled)
+    }
+
+    func testConfigDecodesDisabledHotkeys() throws {
+        let json = """
+        {
+            "hotkey": {"keyCode": 63, "modifiers": []},
+            "hotkeysEnabled": false,
+            "modelSize": "base.en",
+            "language": "en"
+        }
+        """.data(using: .utf8)!
+        let config = try Config.decode(from: json)
+        XCTAssertFalse(config.effectiveHotkeysEnabled)
+        XCTAssertEqual(config.hotkeySummary(), "disabled")
+        XCTAssertTrue(config.runtimeProfiles().isEmpty)
+    }
+
+    func testConfigDecodesEmptyHotkeysAsDisabled() throws {
+        let json = """
+        {
+            "hotkeys": [],
+            "modelSize": "base.en",
+            "language": "en"
+        }
+        """.data(using: .utf8)!
+        let config = try Config.decode(from: json)
+        XCTAssertFalse(config.effectiveHotkeysEnabled)
+        XCTAssertEqual(config.hotkey.keyCode, 63)
+        XCTAssertTrue(config.runtimeProfiles().isEmpty)
+    }
+
+    func testConfigEncodeRoundtripPreservesDisabledHotkeys() throws {
+        let json = """
+        {
+            "hotkey": {"keyCode": 96, "modifiers": []},
+            "hotkeysEnabled": false,
+            "modelSize": "base.en",
+            "language": "en"
+        }
+        """.data(using: .utf8)!
+        let config = try Config.decode(from: json)
+        let data = try JSONEncoder().encode(config)
+        let again = try Config.decode(from: data)
+        XCTAssertFalse(again.effectiveHotkeysEnabled)
+        XCTAssertEqual(again.hotkey.keyCode, 96)
+    }
+
+    func testConfigDisablesProfilesWithoutDroppingThem() throws {
+        let json = """
+        {
+            "hotkeysEnabled": false,
+            "profiles": [
+                {
+                    "id": "dictate-ja",
+                    "hotkey": {"keyCode": 63, "modifiers": []},
+                    "modelSize": "large-v3-turbo",
+                    "language": "ja"
+                },
+                {
+                    "id": "ja-en",
+                    "hotkey": {"keyCode": 63, "modifiers": ["shift"]},
+                    "action": "translate",
+                    "targetLanguage": "en"
+                }
+            ],
+            "modelSize": "large-v3-turbo",
+            "language": "ja"
+        }
+        """.data(using: .utf8)!
+        let config = try Config.decode(from: json)
+        XCTAssertFalse(config.effectiveHotkeysEnabled)
+        XCTAssertEqual(config.profiles?.count, 2)
+        XCTAssertEqual(config.hotkeys.count, 2)
+        XCTAssertTrue(config.runtimeProfiles().isEmpty)
+    }
+
+    func testConfigDisablesOneProfileWithoutDroppingOthers() throws {
+        let json = """
+        {
+            "disabledHotkeys": [
+                {"keyCode": 63, "modifiers": []}
+            ],
+            "profiles": [
+                {
+                    "id": "dictate-ja",
+                    "hotkey": {"keyCode": 63, "modifiers": []},
+                    "modelSize": "large-v3-turbo",
+                    "language": "ja"
+                },
+                {
+                    "id": "ja-en",
+                    "hotkey": {"keyCode": 63, "modifiers": ["shift"]},
+                    "action": "translate",
+                    "targetLanguage": "en"
+                },
+                {
+                    "id": "en-ja",
+                    "hotkey": {"keyCode": 63, "modifiers": ["cmd"]},
+                    "action": "translate",
+                    "targetLanguage": "ja"
+                }
+            ],
+            "modelSize": "large-v3-turbo",
+            "language": "ja"
+        }
+        """.data(using: .utf8)!
+        let config = try Config.decode(from: json)
+        XCTAssertTrue(config.effectiveHotkeysEnabled)
+        XCTAssertEqual(config.profiles?.count, 3)
+        XCTAssertEqual(config.runtimeProfiles().map { $0.id }, ["ja-en", "en-ja"])
+        XCTAssertFalse(config.hotkeySummary().contains("dictate-ja"))
+        XCTAssertTrue(config.hotkeySummary().contains("ja-en:shift+"))
+        XCTAssertTrue(config.hotkeySummary().contains("en-ja:cmd+"))
+    }
+
     // MARK: - Language and model constants
 
     func testSupportedLanguagesContainsEnglish() {

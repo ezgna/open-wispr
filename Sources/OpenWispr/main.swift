@@ -14,6 +14,8 @@ func printUsage() {
     USAGE:
         open-wispr start              Start the dictation daemon
         open-wispr set-hotkey <key>   Set the push-to-talk hotkey
+        open-wispr disable-hotkey [key] Disable all hotkeys, or one key if provided
+        open-wispr enable-hotkey [key]  Re-enable all hotkeys, or one key if provided
         open-wispr get-hotkey         Show current hotkey
         open-wispr set-model <size>   Set the Whisper model
         open-wispr set-language <code>  Set the language (e.g. en, fr, auto)
@@ -26,6 +28,7 @@ func printUsage() {
         open-wispr set-hotkey rightoption        Right Option key
         open-wispr set-hotkey f5                 F5 key
         open-wispr set-hotkey ctrl+space         Ctrl + Space
+        open-wispr set-hotkey none               Disable hotkeys
 
     AVAILABLE MODELS:
         \(Config.supportedModels.joined(separator: ", "))
@@ -47,7 +50,16 @@ func cmdStart() {
     app.run()
 }
 
+func isHotkeyDisableToken(_ value: String) -> Bool {
+    ["none", "off", "disabled", "disable"].contains(value.lowercased())
+}
+
 func cmdSetHotkey(_ keyString: String) {
+    if isHotkeyDisableToken(keyString) {
+        cmdDisableHotkey()
+        return
+    }
+
     guard let parsed = KeyCodes.parse(keyString) else {
         print("Error: Unknown key '\(keyString)'")
         print("Run 'open-wispr --help' for examples")
@@ -56,11 +68,67 @@ func cmdSetHotkey(_ keyString: String) {
 
     var config = Config.load()
     config.hotkey = HotkeyConfig(keyCode: parsed.keyCode, modifiers: parsed.modifiers)
+    config.hotkeysEnabled = FlexBool(true)
+    config.disabledHotkeys = []
 
     do {
         try config.save()
         let desc = KeyCodes.describe(keyCode: parsed.keyCode, modifiers: parsed.modifiers)
         print("Hotkey set to: \(desc)")
+    } catch {
+        print("Error saving config: \(error.localizedDescription)")
+        exit(1)
+    }
+}
+
+func cmdDisableHotkey(_ keyString: String? = nil) {
+    var config = Config.load()
+    if let keyString {
+        guard let parsed = KeyCodes.parse(keyString) else {
+            print("Error: Unknown key '\(keyString)'")
+            print("Run 'open-wispr --help' for examples")
+            exit(1)
+        }
+        let hotkey = HotkeyConfig(keyCode: parsed.keyCode, modifiers: parsed.modifiers)
+        if !config.disabledHotkeys.contains(hotkey) {
+            config.disabledHotkeys.append(hotkey)
+        }
+        config.hotkeysEnabled = FlexBool(true)
+    } else {
+        config.hotkeysEnabled = FlexBool(false)
+    }
+
+    do {
+        try config.save()
+        if let keyString {
+            print("Hotkey disabled: \(keyString)")
+        } else {
+            print("Hotkeys disabled")
+        }
+    } catch {
+        print("Error saving config: \(error.localizedDescription)")
+        exit(1)
+    }
+}
+
+func cmdEnableHotkey(_ keyString: String? = nil) {
+    var config = Config.load()
+    config.hotkeysEnabled = FlexBool(true)
+    if let keyString {
+        guard let parsed = KeyCodes.parse(keyString) else {
+            print("Error: Unknown key '\(keyString)'")
+            print("Run 'open-wispr --help' for examples")
+            exit(1)
+        }
+        let hotkey = HotkeyConfig(keyCode: parsed.keyCode, modifiers: parsed.modifiers)
+        config.disabledHotkeys.removeAll { $0 == hotkey }
+    } else {
+        config.disabledHotkeys = []
+    }
+
+    do {
+        try config.save()
+        print("Hotkey enabled: \(config.hotkeySummary())")
     } catch {
         print("Error saving config: \(error.localizedDescription)")
         exit(1)
@@ -161,6 +229,10 @@ case "set-hotkey":
         exit(1)
     }
     cmdSetHotkey(args[2])
+case "disable-hotkey":
+    cmdDisableHotkey(args.count > 2 ? args[2] : nil)
+case "enable-hotkey":
+    cmdEnableHotkey(args.count > 2 ? args[2] : nil)
 case "set-model":
     guard args.count > 2 else {
         print("Usage: open-wispr set-model <size>")

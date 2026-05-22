@@ -279,7 +279,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let recordedLevels = recorder.lastRecordingLevels
-        let profile = activeProfile ?? config.runtimeProfiles()[0]
+        guard let profile = activeProfile ?? config.runtimeProfiles().first else {
+            activeProfile = nil
+            try? FileManager.default.removeItem(at: audioURL)
+            statusBar.state = .idle
+            return
+        }
         activeProfile = nil
 
         statusBar.state = .transcribing

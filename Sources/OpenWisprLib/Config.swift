@@ -7,6 +7,8 @@ public struct LanguageOption: Equatable, Sendable {
 
 public struct Config: Codable {
     public var hotkeys: [HotkeyConfig]
+    public var hotkeysEnabled: FlexBool?
+    public var disabledHotkeys: [HotkeyConfig]
     public var profiles: [DictationProfile]?
     public var modelPath: String?
     public var modelSize: String
@@ -19,18 +21,30 @@ public struct Config: Codable {
     public var audioInputDeviceID: UInt32?
 
     public var hotkey: HotkeyConfig {
-        get { hotkeys[0] }
-        set { hotkeys = Config.deduplicateHotkeys([newValue]) }
+        get { hotkeys.first ?? Config.defaultHotkey }
+        set {
+            hotkeys = Config.deduplicateHotkeys([newValue])
+            hotkeysEnabled = FlexBool(true)
+        }
+    }
+
+    public var effectiveHotkeysEnabled: Bool {
+        hotkeysEnabled?.value ?? true
     }
 
     public func hotkeySummary() -> String {
-        guard profiles?.isEmpty == false else {
-            return hotkeys
-                .map { KeyCodes.describe(keyCode: $0.keyCode, modifiers: $0.modifiers) }
+        let profiles = runtimeProfiles()
+        guard !profiles.isEmpty else {
+            return "disabled"
+        }
+
+        guard self.profiles?.isEmpty == false else {
+            return profiles
+                .map { KeyCodes.describe(keyCode: $0.hotkey.keyCode, modifiers: $0.hotkey.modifiers) }
                 .joined(separator: " · ")
         }
 
-        return runtimeProfiles()
+        return profiles
             .map { profile in
                 let desc = KeyCodes.describe(keyCode: profile.hotkey.keyCode, modifiers: profile.hotkey.modifiers)
                 return "\(profile.id):\(desc)"
@@ -57,11 +71,16 @@ public struct Config: Codable {
     }
 
     public func runtimeProfiles() -> [DictationProfile] {
-        if let profiles = profiles, !profiles.isEmpty {
-            return profiles
+        guard effectiveHotkeysEnabled else {
+            return []
         }
 
-        return hotkeys.enumerated().map { index, hotkey in
+        if let profiles = profiles, !profiles.isEmpty {
+            return profiles.filter { !disabledHotkeys.contains($0.hotkey) }
+        }
+
+        let activeHotkeys = hotkeys.filter { !disabledHotkeys.contains($0) }
+        return activeHotkeys.enumerated().map { index, hotkey in
             DictationProfile(
                 id: index == 0 ? "default" : "hotkey-\(index + 1)",
                 hotkey: hotkey,
@@ -91,6 +110,8 @@ public struct Config: Codable {
     private enum CodingKeys: String, CodingKey {
         case hotkey
         case hotkeys
+        case hotkeysEnabled
+        case disabledHotkeys
         case profiles
         case modelPath
         case modelSize
@@ -108,6 +129,8 @@ public struct Config: Codable {
         let profilesList = try c.decodeIfPresent([DictationProfile].self, forKey: .profiles)
         let hotkeysList = try c.decodeIfPresent([HotkeyConfig].self, forKey: .hotkeys)
         let legacyHotkey = try c.decodeIfPresent(HotkeyConfig.self, forKey: .hotkey)
+        let explicitHotkeysEnabled = try c.decodeIfPresent(FlexBool.self, forKey: .hotkeysEnabled)
+        let disabledHotkeysList = try c.decodeIfPresent([HotkeyConfig].self, forKey: .disabledHotkeys) ?? []
         if let list = profilesList, !list.isEmpty {
             self.profiles = Config.deduplicateProfiles(list)
             self.hotkeys = Config.deduplicateHotkeys(self.profiles?.map { $0.hotkey } ?? [])
@@ -119,8 +142,10 @@ public struct Config: Codable {
             self.hotkeys = [legacy]
         } else {
             self.profiles = nil
-            self.hotkeys = [HotkeyConfig(keyCode: 63, modifiers: [])]
+            self.hotkeys = [Config.defaultHotkey]
         }
+        self.hotkeysEnabled = explicitHotkeysEnabled ?? (hotkeysList?.isEmpty == true ? FlexBool(false) : nil)
+        self.disabledHotkeys = Config.deduplicateHotkeys(disabledHotkeysList)
         self.modelPath = try c.decodeIfPresent(String.self, forKey: .modelPath)
         self.modelSize = try c.decode(String.self, forKey: .modelSize)
         self.language = try c.decode(String.self, forKey: .language)
@@ -135,7 +160,11 @@ public struct Config: Codable {
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(hotkeys, forKey: .hotkeys)
-        try c.encode(hotkeys[0], forKey: .hotkey)
+        try c.encode(hotkeys.first ?? Config.defaultHotkey, forKey: .hotkey)
+        try c.encodeIfPresent(hotkeysEnabled, forKey: .hotkeysEnabled)
+        if !disabledHotkeys.isEmpty {
+            try c.encode(disabledHotkeys, forKey: .disabledHotkeys)
+        }
         try c.encodeIfPresent(profiles, forKey: .profiles)
         try c.encodeIfPresent(modelPath, forKey: .modelPath)
         try c.encode(modelSize, forKey: .modelSize)
@@ -150,6 +179,8 @@ public struct Config: Codable {
 
     public init(
         hotkeys: [HotkeyConfig],
+        hotkeysEnabled: FlexBool? = nil,
+        disabledHotkeys: [HotkeyConfig] = [],
         profiles: [DictationProfile]? = nil,
         modelPath: String?,
         modelSize: String,
@@ -167,9 +198,11 @@ public struct Config: Codable {
         } else {
             self.profiles = nil
             self.hotkeys = hotkeys.isEmpty
-                ? [HotkeyConfig(keyCode: 63, modifiers: [])]
+                ? [Config.defaultHotkey]
                 : Config.deduplicateHotkeys(hotkeys)
         }
+        self.hotkeysEnabled = hotkeysEnabled
+        self.disabledHotkeys = Config.deduplicateHotkeys(disabledHotkeys)
         self.modelPath = modelPath
         self.modelSize = modelSize
         self.language = language
@@ -311,6 +344,8 @@ public struct Config: Codable {
 
     public static let defaultMaxRecordings = 0
 
+    public static let defaultHotkey = HotkeyConfig(keyCode: 63, modifiers: [])
+
     public static func effectiveMaxRecordings(_ value: Int?) -> Int {
         let raw = value ?? Config.defaultMaxRecordings
         if raw == 0 { return 0 }
@@ -318,7 +353,7 @@ public struct Config: Codable {
     }
 
     public static let defaultConfig = Config(
-        hotkeys: [HotkeyConfig(keyCode: 63, modifiers: [])],
+        hotkeys: [Config.defaultHotkey],
         profiles: nil,
         modelPath: nil,
         modelSize: "base.en",

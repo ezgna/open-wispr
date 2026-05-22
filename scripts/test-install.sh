@@ -63,7 +63,10 @@ backup_config
 trap restore_config EXIT
 
 check_output "set-hotkey f5 works" "Hotkey set to: f5" "$BIN" set-hotkey f5
+check_output "disable-hotkey works" "Hotkeys disabled" "$BIN" disable-hotkey
+check_output "get-hotkey shows disabled hotkey" "Current hotkey: disabled" "$BIN" get-hotkey
 check_output "set-hotkey ctrl+space works" "Hotkey set to: ctrl+space" "$BIN" set-hotkey ctrl+space
+check_output "disable one hotkey works" "Hotkey disabled: ctrl+space" "$BIN" disable-hotkey ctrl+space
 check_output "set-hotkey rejects invalid key" "Unknown key" "$BIN" set-hotkey invalidkey
 check_output "set-model rejects invalid model" "Unknown model" "$BIN" set-model fakemodel
 check_output "unknown command shows error" "Unknown command" "$BIN" badcommand

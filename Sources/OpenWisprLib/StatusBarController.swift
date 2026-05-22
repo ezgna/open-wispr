@@ -290,6 +290,19 @@ class StatusBarController: NSObject {
 
         menu.addItem(NSMenuItem.separator())
 
+        let hotkeysTarget = MenuItemTarget { [weak self] in
+            var cfg = Config.load()
+            let current = cfg.effectiveHotkeysEnabled
+            cfg.hotkeysEnabled = FlexBool(!current)
+            try? cfg.save()
+            self?.onConfigChange?(cfg)
+        }
+        menuItemTargets.append(hotkeysTarget)
+        let hotkeysItem = NSMenuItem(title: "Hotkeys Enabled", action: #selector(MenuItemTarget.invoke), keyEquivalent: "")
+        hotkeysItem.target = hotkeysTarget
+        hotkeysItem.state = config.effectiveHotkeysEnabled ? .on : .off
+        menu.addItem(hotkeysItem)
+
         let toggleTarget = MenuItemTarget { [weak self] in
             var cfg = Config.load()
             let current = cfg.toggleMode?.value ?? false

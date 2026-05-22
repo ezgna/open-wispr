@@ -45,7 +45,8 @@ Edit `~/.config/open-wispr/config.json`:
   "language": "en",
   "spokenPunctuation": false,
   "maxRecordings": 0,
-  "toggleMode": false
+  "toggleMode": false,
+  "hotkeysEnabled": true
 }
 ```
 
@@ -64,10 +65,26 @@ To bind multiple hotkeys, use the `hotkeys` array instead:
 
 Both `hotkey` (single) and `hotkeys` (array) are supported. If both are present, `hotkeys` takes precedence.
 
+To temporarily disable all push-to-talk bindings without losing them:
+
+```bash
+open-wispr disable-hotkey
+```
+
+To disable only one binding, pass the key:
+
+```bash
+open-wispr disable-hotkey fn
+```
+
+Re-enable bindings later with `open-wispr enable-hotkey`, `open-wispr enable-hotkey <key>`, or by setting a new key with `open-wispr set-hotkey <key>`.
+
 | Option | Default | Values |
 |---|---|---|
 | **hotkey** | `63` | Globe (`63`), Right Option (`61`), F5 (`96`), or any key code |
 | **hotkeys** | — | Array of hotkey objects — bind multiple keys to trigger dictation |
+| **hotkeysEnabled** | `true` | `false` disables all hotkeys while preserving configured bindings |
+| **disabledHotkeys** | `[]` | Array of hotkey objects to temporarily disable while leaving other bindings active |
 | **modifiers** | `[]` | `"cmd"`, `"ctrl"`, `"shift"`, `"opt"` — combine for chords |
 | **modelSize** | `"base.en"` | See model table below |
 | **language** | `"en"` | `"auto"` for auto-detect, or any [ISO 639-1 code](https://en.wikipedia.org/wiki/List_of_ISO_639-1_codes) — e.g. `it`, `fr`, `de`, `es` |

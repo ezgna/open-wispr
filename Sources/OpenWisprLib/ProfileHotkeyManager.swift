@@ -40,6 +40,8 @@ final class ProfileHotkeyManager {
         self.onKeyDown = onKeyDown
         self.onKeyUp = onKeyUp
 
+        guard !profiles.isEmpty else { return }
+
         let mask: NSEvent.EventTypeMask = [.keyDown, .keyUp, .flagsChanged]
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] event in
             self?.handleEvent(event)

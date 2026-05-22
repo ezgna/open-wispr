@@ -9,6 +9,18 @@ final class ProfileHotkeyManagerTests: XCTestCase {
     private let fnFlag = UInt64(1 << 23)
     private let shiftFlag = UInt64(1 << 17)
 
+    func testEmptyProfilesDoNotStart() {
+        var starts: [String] = []
+        let manager = ProfileHotkeyManager(
+            profiles: [],
+            onKeyDown: { starts.append($0.id) }
+        )
+
+        manager.handleEvent(flagsChanged(fnKeyCode, flags: fnFlag))
+
+        XCTAssertEqual(starts, [])
+    }
+
     func testToggleModeDefersBareModifierUntilRelease() {
         var starts: [String] = []
         let manager = makeManager { starts.append($0.id) }

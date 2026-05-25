@@ -3,9 +3,13 @@ import XCTest
 @testable import OpenWisprLib
 
 final class ProfileHotkeyManagerTests: XCTestCase {
+    private let cmdKeyCode: UInt16 = 55
+    private let optionKeyCode: UInt16 = 58
     private let fnKeyCode: UInt16 = 63
     private let shiftKeyCode: UInt16 = 56
     private let spaceKeyCode: UInt16 = 49
+    private let cmdFlag = UInt64(1 << 20)
+    private let optionFlag = UInt64(1 << 19)
     private let fnFlag = UInt64(1 << 23)
     private let shiftFlag = UInt64(1 << 17)
 
@@ -54,6 +58,75 @@ final class ProfileHotkeyManagerTests: XCTestCase {
         manager.handleEvent(flagsChanged(fnKeyCode, flags: 0))
 
         XCTAssertEqual(starts, [])
+    }
+
+    func testModifierChordDoesNotUseStaleModifierState() {
+        var starts: [String] = []
+        let manager = ProfileHotkeyManager(
+            profiles: [
+                profile(id: "cmd-option", keyCode: optionKeyCode, modifiers: ["cmd"]),
+            ],
+            toggleMode: true,
+            onKeyDown: { starts.append($0.id) }
+        )
+
+        manager.handleEvent(flagsChanged(cmdKeyCode, flags: cmdFlag))
+        manager.handleEvent(flagsChanged(optionKeyCode, flags: optionFlag))
+
+        XCTAssertEqual(starts, [])
+    }
+
+    func testModifierChordStartsWhenRequiredModifierIsPresent() {
+        var starts: [String] = []
+        let manager = ProfileHotkeyManager(
+            profiles: [
+                profile(id: "cmd-option", keyCode: optionKeyCode, modifiers: ["cmd"]),
+            ],
+            toggleMode: true,
+            onKeyDown: { starts.append($0.id) }
+        )
+
+        manager.handleEvent(flagsChanged(cmdKeyCode, flags: cmdFlag))
+        manager.handleEvent(flagsChanged(optionKeyCode, flags: cmdFlag | optionFlag))
+
+        XCTAssertEqual(starts, ["cmd-option"])
+    }
+
+    func testModifierChordDoesNotRetriggerOnNonModifierKey() {
+        var starts: [String] = []
+        let manager = ProfileHotkeyManager(
+            profiles: [
+                profile(id: "cmd-option", keyCode: optionKeyCode, modifiers: ["cmd"]),
+            ],
+            toggleMode: true,
+            onKeyDown: { starts.append($0.id) }
+        )
+
+        manager.handleEvent(flagsChanged(cmdKeyCode, flags: cmdFlag))
+        manager.handleEvent(flagsChanged(optionKeyCode, flags: cmdFlag | optionFlag))
+        manager.handleEvent(keyDown(spaceKeyCode, flags: cmdFlag | optionFlag))
+
+        XCTAssertEqual(starts, ["cmd-option"])
+    }
+
+    func testHoldModeModifierChordStopsWhenAnyChordModifierIsReleased() {
+        var starts: [String] = []
+        var stops: [String] = []
+        let manager = ProfileHotkeyManager(
+            profiles: [
+                profile(id: "cmd-option", keyCode: optionKeyCode, modifiers: ["cmd"]),
+            ],
+            toggleMode: false,
+            onKeyDown: { starts.append($0.id) },
+            onKeyUp: { stops.append($0.id) }
+        )
+
+        manager.handleEvent(flagsChanged(cmdKeyCode, flags: cmdFlag))
+        manager.handleEvent(flagsChanged(optionKeyCode, flags: cmdFlag | optionFlag))
+        manager.handleEvent(flagsChanged(cmdKeyCode, flags: optionFlag))
+
+        XCTAssertEqual(starts, ["cmd-option"])
+        XCTAssertEqual(stops, ["cmd-option"])
     }
 
     private func makeManager(onStart: @escaping (DictationProfile) -> Void) -> ProfileHotkeyManager {

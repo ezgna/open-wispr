@@ -58,6 +58,8 @@ final class ProfileHotkeyManager {
     }
 
     func handleEvent(_ event: NSEvent) {
+        reconcileModifierState(with: event)
+
         if event.type == .flagsChanged, Self.isModifierOnlyKey(event.keyCode) {
             if updateModifierState(event) {
                 handlePress(event)
@@ -170,13 +172,16 @@ final class ProfileHotkeyManager {
 
     private func matches(_ hotkey: HotkeyConfig, event: NSEvent) -> Bool {
         if Self.isModifierOnlyKey(hotkey.keyCode) {
+            guard event.type == .flagsChanged else { return false }
             let current = currentModifiers(event)
             guard let ownFlag = Self.ownModifierFlag(for: hotkey.keyCode) else { return false }
-            guard current & ownFlag == ownFlag else { return false }
+            let targetFlags = ownFlag | hotkey.modifierFlags
+            guard current == targetFlags else { return false }
             if hotkey.modifierFlags == 0 {
-                guard event.type == .flagsChanged, event.keyCode == hotkey.keyCode else { return false }
+                guard event.keyCode == hotkey.keyCode else { return false }
             }
-            return (current & ~ownFlag) == hotkey.modifierFlags
+            guard let eventFlag = Self.ownModifierFlag(for: event.keyCode) else { return false }
+            return targetFlags & eventFlag == eventFlag
         }
 
         guard event.type == .keyDown else { return false }
@@ -188,9 +193,12 @@ final class ProfileHotkeyManager {
         let hotkey = profile.hotkey
         if Self.isModifierOnlyKey(hotkey.keyCode) {
             guard event.type == .flagsChanged else { return false }
-            guard event.keyCode == hotkey.keyCode else { return false }
             guard let ownFlag = Self.ownModifierFlag(for: hotkey.keyCode) else { return false }
-            return currentModifiers(event) & ownFlag == 0
+            let targetFlags = ownFlag | hotkey.modifierFlags
+            if hotkey.modifierFlags == 0 {
+                guard event.keyCode == hotkey.keyCode else { return false }
+            }
+            return currentModifiers(event) & targetFlags != targetFlags
         }
 
         return event.type == .keyUp && event.keyCode == hotkey.keyCode
@@ -212,7 +220,7 @@ final class ProfileHotkeyManager {
     }
 
     private func currentModifiers(_ event: NSEvent) -> UInt64 {
-        var flags = UInt64(event.modifierFlags.rawValue) & Self.modifierMask
+        var flags = rawModifiers(event)
         for keyCode in pressedModifierKeys {
             if let flag = Self.ownModifierFlag(for: keyCode) {
                 flags |= flag
@@ -221,9 +229,24 @@ final class ProfileHotkeyManager {
         return flags
     }
 
+    private func rawModifiers(_ event: NSEvent) -> UInt64 {
+        UInt64(event.modifierFlags.rawValue) & Self.modifierMask
+    }
+
+    private func reconcileModifierState(with event: NSEvent) {
+        let rawFlags = rawModifiers(event)
+        pressedModifierKeys = pressedModifierKeys.filter { keyCode in
+            if event.type == .flagsChanged, keyCode == event.keyCode {
+                return true
+            }
+            guard let flag = Self.ownModifierFlag(for: keyCode) else { return false }
+            return rawFlags & flag == flag
+        }
+    }
+
     private func updateModifierState(_ event: NSEvent) -> Bool {
         guard let ownFlag = Self.ownModifierFlag(for: event.keyCode) else { return false }
-        let rawFlags = UInt64(event.modifierFlags.rawValue) & Self.modifierMask
+        let rawFlags = rawModifiers(event)
         let rawSaysDown = rawFlags & ownFlag == ownFlag
         let wasDown = pressedModifierKeys.contains(event.keyCode)
 
